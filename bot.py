@@ -48,8 +48,8 @@ BOT_VERSION = "1.0.0 — Ghost VR Edition"
 START_TIME = time.time()
 
 # Twitch config (set these env vars for stream alerts)
-TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID", "")
-TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
+TWITCH_CLIENT_ID = os.environ.get("dnraeq1qmd7uk6zve3udx3ea9j3dpe", "")
+TWITCH_CLIENT_SECRET = os.environ.get("0b0xioy36hnjwj1a1g4oxgo71pf11d", "")
 
 # ─────────────────────────────────────────────
 #  STORAGE (in-memory, persisted to JSON)
