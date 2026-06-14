@@ -119,23 +119,23 @@ async def on_ready():
     check_streams.start()
     check_reminders.start()
 
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setwelcome(ctx, channel: discord.TextChannel, *, message=None):
-    g = get_guild_data(ctx.guild.id)
+@bot.event
+async def on_member_join(member: discord.Member):
+    channel = member.guild.get_channel(1433981691973734471)
 
-    g["welcome_channel"] = channel.id
+    if channel is None:
+        return
 
-    g["welcome_msg"] = message or (
-        "👋 Hello {user}, welcome to **{server}**!\n\n"
+    message = (
+        f"👋 Hello {member.mention}, welcome to **{member.guild.name}**!\n\n"
         "You can buy, sell, trade or team up with people.\n"
         "Make sure to check out the rules!"
     )
 
-    save_data(db)
-
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
-
+    try:
+        await channel.send(message)
+    except Exception as e:
+        print(f"[WELCOME ERROR] {e}")
 @bot.event
 async def on_message(message):
     if message.author.bot:
