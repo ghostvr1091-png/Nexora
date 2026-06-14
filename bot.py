@@ -119,31 +119,22 @@ async def on_ready():
     check_streams.start()
     check_reminders.start()
 
-@bot.event
-async def on_member_join(member: discord.Member):
-    print(f"JOIN EVENT: {member}")
+@bot.command()
+@commands.has_permissions(manage_guild=True)
+async def setwelcome(ctx, channel: discord.TextChannel, *, message=None):
+    g = get_guild_data(ctx.guild.id)
 
-    channel = member.guild.get_channel(1433981691973734471)
+    g["welcome_channel"] = channel.id
 
-    if not channel:
-        print("Channel not found")
-        return
+    g["welcome_msg"] = message or (
+        "👋 Hello {user}, welcome to **{server}**!\n\n"
+        "You can buy, sell, trade or team up with people.\n"
+        "Make sure to check out the rules!"
+    )
 
-    try:
-        await channel.send(f"👋 Welcome {member.mention}!")
-    except Exception as e:
-        print(f"Send failed: {e}")
+    save_data(db)
 
-@bot.event
-async def on_member_remove(member):
-    g = get_guild_data(member.guild.id)
-    ch_id = g.get("welcome_channel")
-    if ch_id:
-        ch = bot.get_channel(int(ch_id))
-        if ch:
-            msg = g["leave_msg"].replace("{user}", str(member)).replace("{server}", member.guild.name)
-            embed = discord.Embed(description=msg, color=discord.Color.red())
-            await ch.send(embed=embed)
+    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
 
 @bot.event
 async def on_message(message):
