@@ -131,10 +131,6 @@ async def setwelcome(ctx, channel: discord.TextChannel):
     save_data(db)
 
     await ctx.send(f"✅ Welcome channel set to {channel.mention}")
-    try:
-        await channel.send(message)
-    except Exception as e:
-        print(f"[WELCOME ERROR] {e}")
 
     # AFK check — mention someone who is AFK
     if message.mentions:
