@@ -119,19 +119,20 @@ async def on_ready():
     check_streams.start()
     check_reminders.start()
 
-@commands.Cog.listener()
-async def on_member_join(self, member: discord.Member):
+@bot.event
+async def on_member_join(member: discord.Member):
+    print(f"JOIN EVENT: {member}")
+
     channel = member.guild.get_channel(1433981691973734471)
+
     if not channel:
+        print("Channel not found")
         return
 
-    # default message (you can replace this with saved data later)
-    msg = "👋 Welcome {user} to {server}!"
-
-    msg = msg.replace("{user}", member.mention)
-    msg = msg.replace("{server}", member.guild.name)
-
-    await channel.send(msg)
+    try:
+        await channel.send(f"👋 Welcome {member.mention}!")
+    except Exception as e:
+        print(f"Send failed: {e}")
 
 @bot.event
 async def on_member_remove(member):
@@ -389,13 +390,26 @@ async def setwelcome(ctx, channel: discord.TextChannel, *, message=None):
 #  STREAM ALERTS
 # ─────────────────────────────────────────────
 
+import re
+from discord.ext import commands
+
+STREAM_REGEX = re.compile(
+    r"(https?://)?(www\.)?(youtube\.com|youtu\.be|twitch\.tv|tiktok\.com)/.+"
+)
+
 @bot.command()
 @commands.has_permissions(manage_guild=True)
-async def setstreamchannel(ctx, channel: discord.TextChannel):
+async def setstream(ctx, link: str):
     g = get_guild_data(ctx.guild.id)
-    g["stream_channel"] = str(channel.id)
+
+    # validate link
+    if not STREAM_REGEX.match(link):
+        return await ctx.send("❌ Please provide a valid YouTube, Twitch, or TikTok link.")
+
+    g["stream_link"] = link
     save_data(db)
-    await ctx.send(f"✅ Stream alerts will be sent to {channel.mention}!")
+
+    await ctx.send(f"✅ Stream link saved: {link}")
 
 # ── TWITCH ──────────────────────────────────────────────────────────
 @bot.command()
