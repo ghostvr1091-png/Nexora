@@ -54,7 +54,7 @@ TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
 # ─────────────────────────────────────────────
 #  STORAGE (in-memory, persisted to JSON)
 # ─────────────────────────────────────────────
-DATA_FILE = "/app/.agents/skills/discord-bot/data.json"
+DATA_FILE = "/tmp/data.json"
 
 def load_data():
     try:
@@ -1211,6 +1211,24 @@ async def on_command_error(ctx, error):
         print(f"[Error] {error}")
 
 # ─────────────────────────────────────────────
+#  KEEP-ALIVE WEB SERVER (required for Render)
+# ─────────────────────────────────────────────
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class KeepAlive(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Ghost VR Bot is alive!")
+    def log_message(self, format, *args):
+        pass
+
+def run_server():
+    server = HTTPServer(("0.0.0.0", 8080), KeepAlive)
+    server.serve_forever()
+
+# ─────────────────────────────────────────────
 #  LAUNCH
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
@@ -1218,4 +1236,6 @@ if __name__ == "__main__":
         print("❌ ERROR: DISCORD_BOT_TOKEN not set!")
         sys.exit(1)
     print("🚀 Starting Ghost VR's Ultimate Discord Bot...")
+    threading.Thread(target=run_server, daemon=True).start()
     bot.run(TOKEN)
+
