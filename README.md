@@ -11,6 +11,6 @@
 Type !help in Discord to see all 50+ commands.
 
 ## Optional API Keys (for stream alerts)
-- TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET → Twitch live alerts
+- dnraeq1qmd7uk6zve3udx3ea9j3dpe + 0b0xioy36hnjwj1a1g4oxgo71pf11d → Twitch live alerts
 - YOUTUBE_API_KEY → YouTube live alerts
 - TikTok works with no API key needed
