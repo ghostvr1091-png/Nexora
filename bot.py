@@ -119,22 +119,22 @@ async def on_ready():
     check_streams.start()
     check_reminders.start()
 
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setwelcome(ctx, channel: discord.TextChannel):
-    g = get_guild_data(ctx.guild.id)
-
-    g["welcome_channel"] = channel.id
-
-    g["welcome_msg"] = "👋 Hello {user} to {server}, hope you enjoy your stay and read the rules"
-
-    save_data(db)
-
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
 @bot.event
-async def on_message(message):
-    if message.author.bot:
+async def on_member_join(member: discord.Member):
+    channel = member.guild.get_channel(1433981691973734471)
+
+    if channel is None:
         return
+
+    message = (
+        f"👋 Hello {member.mention}, welcome to **{member.guild.name}**!\n\n"
+      Make sure to check out the rules!"
+    )
+
+    try:
+        await channel.send(message)
+    except Exception as e:
+        print(f"[WELCOME ERROR] {e}")
 
     # AFK check — mention someone who is AFK
     if message.mentions:
