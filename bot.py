@@ -126,9 +126,7 @@ async def setwelcome(ctx, channel: discord.TextChannel):
 
     g["welcome_channel"] = channel.id
 
-    g["welcome_msg"] = (
-        "👋 Hello {user} to {server}, hope you enjoy your stay and read the rules"
-    )
+    g["welcome_msg"] = "👋 Hello {user} to {server}, hope you enjoy your stay and read the rules"
 
     save_data(db)
 
