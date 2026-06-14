@@ -119,23 +119,19 @@ async def on_ready():
     check_streams.start()
     check_reminders.start()
 
-@bot.event
-async def on_member_join(member):
-    g = get_guild_data(member.guild.id)
-    ch_id = g.get("welcome_channel")
-    if ch_id:
-        ch = bot.get_channel(int(ch_id))
-        if ch:
-            msg = g["welcome_msg"].replace("{user}", member.mention).replace("{server}", member.guild.name)
-            embed = discord.Embed(
-                title="👋 Welcome!",
-                description=msg,
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.add_field(name="Member #", value=str(member.guild.member_count))
-            embed.set_footer(text=f"Joined: {datetime.datetime.utcnow().strftime('%Y-%m-%d')}")
-            await ch.send(embed=embed)
+@commands.Cog.listener()
+async def on_member_join(self, member: discord.Member):
+    channel = member.guild.get_channel(1433981691973734471)
+    if not channel:
+        return
+
+    # default message (you can replace this with saved data later)
+    msg = "👋 Welcome {user} to {server}!"
+
+    msg = msg.replace("{user}", member.mention)
+    msg = msg.replace("{server}", member.guild.name)
+
+    await channel.send(msg)
 
 @bot.event
 async def on_member_remove(member):
