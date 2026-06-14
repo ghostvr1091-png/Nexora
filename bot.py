@@ -121,19 +121,18 @@ async def on_ready():
 
 @bot.command()
 @commands.has_permissions(manage_guild=True)
-async def setwelcome(ctx, channel: discord.TextChannel, *, message: str = None):
+async def setwelcome(ctx, channel: discord.TextChannel):
     g = get_guild_data(ctx.guild.id)
 
     g["welcome_channel"] = channel.id
 
-    g["welcome_msg"] = message or (
-        "👋 Hello {user}, welcome to **{server}**!\n\n"
-        "Make sure to read the rules!"
+    g["welcome_msg"] = (
+        "👋 Hello {user} to {server}, hope you enjoy your stay and read the rules"
     )
 
     save_data(db)
 
-    await ctx.send(f"✅ Welcome system set to {channel.mention}")
+    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
 @bot.event
 async def on_message(message):
     if message.author.bot:
