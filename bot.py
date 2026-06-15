@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════╗
-║         👑 GHOST VR'S ULTIMATE DISCORD BOT v2.0 👑        ║
+║         👑 NEXORA BOT v3.0 — THE ULTIMATE BOT 👑          ║
 ║      Full Slash Commands — The Best Bot Ever Built        ║
 ╚══════════════════════════════════════════════════════════╝
-SLASH COMMANDS:
-  /help /ping /uptime /serverinfo /userinfo
-  /ban /kick /mute /unmute /warn /warnings /clearwarnings /purge /lockdown /unlock
-  /announce /embed
-  /setwelcome /setleave /setlog /setstreamchannel
-  /addstreamer /removestreamer
-  /rank /leaderboard
-  /giveaway /endgiveaway
-  /poll
-  /ticket /closeticket
-  /afk /back
-  /remind
-  /8ball /coinflip /roast /ship /roll
-  /ask
-  /addword /removeword /automod
 """
 
 import discord
@@ -30,7 +15,6 @@ import os
 import json
 import random
 import datetime
-import sys
 import time
 from collections import defaultdict
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -40,10 +24,12 @@ import threading
 #  CONFIG
 # ─────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
-BOT_VERSION = "2.0.0 — Ghost VR Slash Edition"
+BOT_VERSION = "3.0.0 — Nexora Ultimate Edition"
 START_TIME = time.time()
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
+BOT_INVITE = "https://discord.com/oauth2/authorize?client_id=1515543797247770654"
+BOT_WEBSITE = "https://nexorabot-e5b5g6zd.manus.space/"
 
 # ─────────────────────────────────────────────
 #  STORAGE
@@ -76,13 +62,23 @@ def get_guild(guild_id):
             "stream_channel": None,
             "twitch_streamers": [],
             "tracked_streamers": {},
+            "twitch_streamers_v2": {},
             "giveaways": {},
             "tickets": {},
+            "ticket_panels": {},
             "automod": {"spam": True, "caps": True, "badwords": []},
             "afk": {},
             "reminders": [],
             "announcement_channel": None,
         }
+        save_data(db)
+    # Ensure new keys exist for old guilds
+    g = db[gid]
+    if "ticket_panels" not in g:
+        g["ticket_panels"] = {}
+        save_data(db)
+    if "twitch_streamers_v2" not in g:
+        g["twitch_streamers_v2"] = {}
         save_data(db)
     return db[gid]
 
@@ -101,7 +97,7 @@ class KeepAlive(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Ghost VR Bot is alive!")
+        self.wfile.write(b"Nexora Bot is alive!")
     def log_message(self, format, *args):
         pass
 
@@ -115,7 +111,7 @@ def run_server():
 @bot.event
 async def on_ready():
     print(f"\n{'═'*55}")
-    print(f"  👑 Ghost VR's Ultimate Bot v2.0 is ONLINE!")
+    print(f"  👑 Nexora Bot v3.0 is ONLINE!")
     print(f"  Bot: {bot.user} (ID: {bot.user.id})")
     print(f"  Servers: {len(bot.guilds)}")
     print(f"{'═'*55}\n")
@@ -130,6 +126,8 @@ async def on_ready():
             name=f"👑 {len(bot.guilds)} servers | /help"
         )
     )
+    t = threading.Thread(target=run_server, daemon=True)
+    t.start()
     check_streams.start()
     check_reminders.start()
     check_giveaways.start()
@@ -253,8 +251,7 @@ async def get_twitch_token():
                 return twitch_token_cache["token"]
     return None
 
-async def verify_twitch_user(username: str, token: str) -> dict | None:
-    """Search Twitch to confirm the account exists. Returns user info or None."""
+async def verify_twitch_user(username: str, token: str):
     if not token:
         return None
     async with aiohttp.ClientSession() as session:
@@ -276,7 +273,6 @@ async def check_streams():
     for guild in bot.guilds:
         g = get_guild(guild.id)
         streamers = g.get("twitch_streamers_v2", {})
-        # streamers = { "username": {"channel_id": "123", "live": False, "login": "exactlogin"} }
         if not streamers:
             continue
         changed = False
@@ -301,7 +297,6 @@ async def check_streams():
                         is_live = len(streams) > 0
                         if is_live and not was_live:
                             s = streams[0]
-                            # Get profile image
                             display_name = s.get("user_name", username)
                             thumb = s.get("thumbnail_url", "").replace("{width}", "320").replace("{height}", "180")
                             embed = discord.Embed(
@@ -385,6 +380,118 @@ async def check_giveaways():
         save_data(db)
 
 # ═══════════════════════════════════════════════
+#  TICKET PANEL VIEWS (Persistent)
+# ═══════════════════════════════════════════════
+
+class TicketReasonModal(discord.ui.Modal):
+    def __init__(self, button_label: str, panel_id: str, guild_id: int, support_roles: list):
+        super().__init__(title=f"Open a {button_label} Ticket")
+        self.button_label = button_label
+        self.panel_id = panel_id
+        self.guild_id = guild_id
+        self.support_roles = support_roles
+        self.reason = discord.ui.TextInput(
+            label="Reason for your ticket",
+            placeholder="Please describe your issue or reason...",
+            style=discord.TextStyle.paragraph,
+            max_length=500,
+            required=True
+        )
+        self.add_item(self.reason)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        reason_text = self.reason.value
+
+        # Build channel permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+        # Add support roles
+        for role_id in self.support_roles:
+            role = guild.get_role(int(role_id))
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+        safe_name = interaction.user.name.lower().replace(" ", "-")[:20]
+        ticket_type = self.button_label.lower().replace(" ", "-")
+        ch = await guild.create_text_channel(
+            f"ticket-{ticket_type}-{safe_name}",
+            overwrites=overwrites,
+            reason=f"Ticket opened by {interaction.user}"
+        )
+
+        # Ping roles in ticket channel
+        ping_text = ""
+        if self.support_roles:
+            ping_text = " ".join([f"<@&{r}>" for r in self.support_roles])
+
+        embed = discord.Embed(
+            title=f"🎫 {self.button_label} Ticket",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="👤 Opened by", value=interaction.user.mention, inline=True)
+        embed.add_field(name="🏷️ Type", value=self.button_label, inline=True)
+        embed.add_field(name="📝 Reason", value=reason_text, inline=False)
+        embed.add_field(name="🔒 To close", value="Use the button below or `/closeticket`", inline=False)
+        embed.set_footer(text=f"Nexora Bot • {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+        close_view = TicketCloseView()
+        msg_content = f"{interaction.user.mention}"
+        if ping_text:
+            msg_content += f" | Support: {ping_text}"
+
+        await ch.send(content=msg_content, embed=embed, view=close_view)
+        await interaction.response.send_message(f"✅ Your ticket has been created: {ch.mention}", ephemeral=True)
+
+class TicketCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if "ticket-" not in interaction.channel.name:
+            await interaction.response.send_message("⚠️ This is not a ticket channel.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="🔒 Ticket Closing",
+            description=f"Closed by {interaction.user.mention}\nThis channel will be deleted in **5 seconds**.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
+        await asyncio.sleep(5)
+        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self, buttons: list, panel_id: str, guild_id: int, support_roles: list):
+        super().__init__(timeout=None)
+        emoji_list = ["🎫", "🛠️", "💰", "🤝", "⭐", "🔒", "📋", "❓", "🎮", "📞"]
+        colors = [
+            discord.ButtonStyle.primary,
+            discord.ButtonStyle.success,
+            discord.ButtonStyle.danger,
+            discord.ButtonStyle.secondary,
+            discord.ButtonStyle.primary,
+        ]
+        for i, label in enumerate(buttons[:10]):
+            btn = discord.ui.Button(
+                label=label,
+                style=colors[i % len(colors)],
+                emoji=emoji_list[i % len(emoji_list)],
+                custom_id=f"ticket_btn_{panel_id}_{i}"
+            )
+            btn.callback = self.make_callback(label, panel_id, guild_id, support_roles)
+            self.add_item(btn)
+
+    def make_callback(self, label, panel_id, guild_id, support_roles):
+        async def callback(interaction: discord.Interaction):
+            modal = TicketReasonModal(label, panel_id, guild_id, support_roles)
+            await interaction.response.send_modal(modal)
+        return callback
+
+# ═══════════════════════════════════════════════
 #  SLASH COMMANDS
 # ═══════════════════════════════════════════════
 
@@ -392,19 +499,43 @@ async def check_giveaways():
 
 @tree.command(name="help", description="Show all bot commands")
 async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="👑 Ghost VR Bot — Command List", color=discord.Color.blurple())
+    embed = discord.Embed(title="👑 Nexora Bot — Command List", color=discord.Color.blurple())
     embed.add_field(name="🛡️ Moderation", value="`/ban` `/kick` `/mute` `/unmute` `/warn` `/warnings` `/clearwarnings` `/purge` `/lockdown` `/unlock`", inline=False)
     embed.add_field(name="📢 Announcements", value="`/announce` `/embed`", inline=False)
     embed.add_field(name="⚙️ Setup", value="`/setwelcome` `/setleave` `/setlog` `/addstreamer` `/removestreamer` `/liststreamers`", inline=False)
     embed.add_field(name="⭐ Leveling", value="`/rank` `/leaderboard`", inline=False)
     embed.add_field(name="🎉 Fun & Games", value="`/giveaway` `/endgiveaway` `/poll` `/8ball` `/coinflip` `/roast` `/ship` `/roll`", inline=False)
-    embed.add_field(name="🎫 Tickets", value="`/ticket` `/closeticket`", inline=False)
+    embed.add_field(name="🎫 Tickets", value="`/ticket-panel` `/ticket` `/closeticket`", inline=False)
     embed.add_field(name="💤 AFK & Reminders", value="`/afk` `/remind`", inline=False)
     embed.add_field(name="🤖 AI", value="`/ask`", inline=False)
     embed.add_field(name="🔒 Automod", value="`/automod` `/addword` `/removeword`", inline=False)
-    embed.add_field(name="ℹ️ Info", value="`/ping` `/uptime` `/serverinfo` `/userinfo`", inline=False)
-    embed.set_footer(text="Ghost VR's Ultimate Bot v2.0")
+    embed.add_field(name="ℹ️ Info", value="`/ping` `/uptime` `/serverinfo` `/userinfo` `/invite` `/website`", inline=False)
+    embed.set_footer(text="Nexora Bot v3.0 — The Best Bot Ever Built")
     await interaction.response.send_message(embed=embed)
+
+@tree.command(name="invite", description="Get the bot invite link")
+async def invite_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="➕ Invite Nexora Bot",
+        description=f"Click the link below to add Nexora Bot to your server!\n\n[**👉 Click here to invite the bot**]({BOT_INVITE})",
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="Thanks for using Nexora Bot!")
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="➕ Invite Bot", url=BOT_INVITE, style=discord.ButtonStyle.link))
+    await interaction.response.send_message(embed=embed, view=view)
+
+@tree.command(name="website", description="Get the bot website link")
+async def website_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🌐 Nexora Bot Website",
+        description=f"Visit our website for commands, updates, and more!\n\n[**👉 Visit the website**]({BOT_WEBSITE})",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="Nexora Bot v3.0")
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="🌐 Visit Website", url=BOT_WEBSITE, style=discord.ButtonStyle.link))
+    await interaction.response.send_message(embed=embed, view=view)
 
 @tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
@@ -424,28 +555,27 @@ async def uptime(interaction: discord.Interaction):
 @tree.command(name="serverinfo", description="Show server information")
 async def serverinfo(interaction: discord.Interaction):
     g = interaction.guild
-    embed = discord.Embed(title=f"🏠 {g.name}", color=discord.Color.blurple())
-    embed.add_field(name="Owner", value=str(g.owner))
-    embed.add_field(name="Members", value=str(g.member_count))
-    embed.add_field(name="Channels", value=str(len(g.channels)))
-    embed.add_field(name="Roles", value=str(len(g.roles)))
-    embed.add_field(name="Created", value=g.created_at.strftime("%Y-%m-%d"))
-    if g.icon:
-        embed.set_thumbnail(url=g.icon.url)
+    embed = discord.Embed(title=f"📊 {g.name}", color=discord.Color.blurple())
+    embed.set_thumbnail(url=g.icon.url if g.icon else None)
+    embed.add_field(name="👑 Owner", value=str(g.owner), inline=True)
+    embed.add_field(name="👥 Members", value=str(g.member_count), inline=True)
+    embed.add_field(name="📅 Created", value=g.created_at.strftime("%Y-%m-%d"), inline=True)
+    embed.add_field(name="💬 Channels", value=str(len(g.channels)), inline=True)
+    embed.add_field(name="🎭 Roles", value=str(len(g.roles)), inline=True)
+    embed.add_field(name="🌍 Region", value="Auto", inline=True)
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="userinfo", description="Show info about a user")
 @app_commands.describe(member="The member to look up")
 async def userinfo(interaction: discord.Interaction, member: discord.Member = None):
     member = member or interaction.user
-    embed = discord.Embed(title=f"👤 {member}", color=discord.Color.blurple())
+    embed = discord.Embed(title=f"👤 {member}", color=member.color)
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="ID", value=str(member.id))
-    embed.add_field(name="Nickname", value=member.nick or "None")
-    embed.add_field(name="Joined", value=member.joined_at.strftime("%Y-%m-%d") if member.joined_at else "Unknown")
-    embed.add_field(name="Account Created", value=member.created_at.strftime("%Y-%m-%d"))
-    top_role = member.top_role.name if member.top_role else "None"
-    embed.add_field(name="Top Role", value=top_role)
+    embed.add_field(name="🆔 ID", value=str(member.id), inline=True)
+    embed.add_field(name="📅 Joined Server", value=member.joined_at.strftime("%Y-%m-%d") if member.joined_at else "N/A", inline=True)
+    embed.add_field(name="📅 Account Created", value=member.created_at.strftime("%Y-%m-%d"), inline=True)
+    roles = [r.mention for r in member.roles if r.name != "@everyone"]
+    embed.add_field(name=f"🎭 Roles ({len(roles)})", value=", ".join(roles[:5]) or "None", inline=False)
     await interaction.response.send_message(embed=embed)
 
 # ─── MODERATION ────────────────────────────────
@@ -455,7 +585,7 @@ async def userinfo(interaction: discord.Interaction, member: discord.Member = No
 @app_commands.default_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     await member.ban(reason=reason)
-    embed = discord.Embed(title="🔨 Banned", description=f"**{member}** was banned.\n**Reason:** {reason}", color=discord.Color.red())
+    embed = discord.Embed(title="🔨 Member Banned", description=f"**{member}** has been banned.\n**Reason:** {reason}", color=discord.Color.red())
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="kick", description="Kick a member")
@@ -463,39 +593,24 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 @app_commands.default_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     await member.kick(reason=reason)
-    embed = discord.Embed(title="👢 Kicked", description=f"**{member}** was kicked.\n**Reason:** {reason}", color=discord.Color.orange())
+    embed = discord.Embed(title="👢 Member Kicked", description=f"**{member}** has been kicked.\n**Reason:** {reason}", color=discord.Color.orange())
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="mute", description="Mute a member")
-@app_commands.describe(member="Member to mute", duration="Duration in minutes (0 = permanent)", reason="Reason")
-@app_commands.default_permissions(manage_roles=True)
-async def mute(interaction: discord.Interaction, member: discord.Member, duration: int = 0, reason: str = "No reason provided"):
-    await interaction.response.defer()
-    muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
-    if not muted_role:
-        muted_role = await interaction.guild.create_role(name="Muted")
-        for ch in interaction.guild.channels:
-            await ch.set_permissions(muted_role, send_messages=False, speak=False)
-    await member.add_roles(muted_role, reason=reason)
-    embed = discord.Embed(title="🔇 Muted", description=f"**{member}** was muted.\n**Reason:** {reason}", color=discord.Color.dark_gray())
-    if duration > 0:
-        embed.add_field(name="Duration", value=f"{duration} minutes")
-    await interaction.followup.send(embed=embed)
-    if duration > 0:
-        await asyncio.sleep(duration * 60)
-        if muted_role in member.roles:
-            await member.remove_roles(muted_role)
+@tree.command(name="mute", description="Timeout a member")
+@app_commands.describe(member="Member to mute", minutes="Duration in minutes")
+@app_commands.default_permissions(moderate_members=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int = 10):
+    until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+    await member.timeout(until)
+    embed = discord.Embed(title="🔇 Member Muted", description=f"**{member}** has been muted for **{minutes} minutes**.", color=discord.Color.orange())
+    await interaction.response.send_message(embed=embed)
 
-@tree.command(name="unmute", description="Unmute a member")
+@tree.command(name="unmute", description="Remove a timeout from a member")
 @app_commands.describe(member="Member to unmute")
-@app_commands.default_permissions(manage_roles=True)
+@app_commands.default_permissions(moderate_members=True)
 async def unmute(interaction: discord.Interaction, member: discord.Member):
-    muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
-    if muted_role and muted_role in member.roles:
-        await member.remove_roles(muted_role)
-        await interaction.response.send_message(f"✅ {member.mention} has been unmuted.")
-    else:
-        await interaction.response.send_message("⚠️ That member isn't muted.", ephemeral=True)
+    await member.timeout(None)
+    await interaction.response.send_message(f"✅ {member.mention} has been unmuted.")
 
 @tree.command(name="warn", description="Warn a member")
 @app_commands.describe(member="Member to warn", reason="Reason for warning")
@@ -514,7 +629,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
 @tree.command(name="warnings", description="Check warnings for a member")
 @app_commands.describe(member="Member to check")
 @app_commands.default_permissions(manage_messages=True)
-async def warnings(interaction: discord.Interaction, member: discord.Member):
+async def warnings_cmd(interaction: discord.Interaction, member: discord.Member):
     g = get_guild(interaction.guild.id)
     warns = g["warnings"].get(str(member.id), [])
     if not warns:
@@ -560,7 +675,7 @@ async def unlock(interaction: discord.Interaction):
 # ─── ANNOUNCEMENTS ─────────────────────────────
 
 @tree.command(name="announce", description="Send an announcement embed")
-@app_commands.describe(title="Announcement title", message="Announcement message", channel="Channel to send to (optional)", ping="Ping everyone? (yes/no)")
+@app_commands.describe(title="Announcement title", message="Announcement message", channel="Channel to send to", ping="Ping everyone? (yes/no)")
 @app_commands.default_permissions(manage_messages=True)
 async def announce(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None, ping: str = "no"):
     ch = channel or interaction.channel
@@ -612,20 +727,18 @@ async def setlog(interaction: discord.Interaction, channel: discord.TextChannel)
     save_data(db)
     await interaction.response.send_message(f"✅ Log channel set to {channel.mention}!")
 
+# ─── STREAMERS ─────────────────────────────────
+
 @tree.command(name="addstreamer", description="Add a Twitch streamer with their own alert channel")
 @app_commands.describe(username="Twitch username to track", channel="Channel to post alerts in")
 @app_commands.default_permissions(manage_guild=True)
 async def addstreamer(interaction: discord.Interaction, username: str, channel: discord.TextChannel):
     await interaction.response.defer()
-    # Verify the Twitch account exists
     token = await get_twitch_token()
     if token:
         user_info = await verify_twitch_user(username, token)
         if not user_info:
-            await interaction.followup.send(
-                f"❌ Could not find a Twitch account named **{username}**. Double-check the username and try again.",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Could not find a Twitch account named **{username}**.", ephemeral=True)
             return
         exact_login = user_info["login"]
         display_name = user_info["display_name"]
@@ -636,9 +749,6 @@ async def addstreamer(interaction: discord.Interaction, username: str, channel: 
         profile_img = ""
 
     g = get_guild(interaction.guild.id)
-    if "twitch_streamers_v2" not in g:
-        g["twitch_streamers_v2"] = {}
-
     if exact_login in g["twitch_streamers_v2"]:
         await interaction.followup.send(f"⚠️ Already tracking **{display_name}**.", ephemeral=True)
         return
@@ -650,15 +760,9 @@ async def addstreamer(interaction: discord.Interaction, username: str, channel: 
         "profile_img": profile_img
     }
     save_data(db)
-
-    embed = discord.Embed(
-        title="✅ Streamer Added!",
-        description=f"Now tracking **{display_name}** on Twitch.\nAlerts will post in {channel.mention} the moment they go live! 🔴",
-        color=discord.Color.purple()
-    )
+    embed = discord.Embed(title="✅ Streamer Added!", description=f"Now tracking **{display_name}**.\nAlerts → {channel.mention} 🔴", color=discord.Color.purple())
     if profile_img:
         embed.set_thumbnail(url=profile_img)
-    embed.set_footer(text=f"twitch.tv/{exact_login}")
     await interaction.followup.send(embed=embed)
 
 @tree.command(name="removestreamer", description="Stop tracking a Twitch streamer")
@@ -679,16 +783,15 @@ async def liststreamers(interaction: discord.Interaction):
     g = get_guild(interaction.guild.id)
     streamers = g.get("twitch_streamers_v2", {})
     if not streamers:
-        await interaction.response.send_message("📭 No streamers are being tracked yet. Use `/addstreamer` to add one!", ephemeral=True)
+        await interaction.response.send_message("📭 No streamers tracked yet. Use `/addstreamer` to add one!", ephemeral=True)
         return
     embed = discord.Embed(title="📡 Tracked Streamers", color=discord.Color.purple())
-    for login, info in streamers.items():
-        ch = bot.get_channel(int(info["channel_id"]))
-        ch_name = ch.mention if ch else "Unknown channel"
+    for username, info in streamers.items():
+        ch = bot.get_channel(int(info["channel_id"])) if info.get("channel_id") else None
         status = "🔴 LIVE" if info.get("live") else "⚫ Offline"
         embed.add_field(
-            name=f"{info.get('display_name', login)}",
-            value=f"Channel: {ch_name}\nStatus: {status}\ntwitch.tv/{login}",
+            name=f"{info.get('display_name', username)}",
+            value=f"Status: {status}\nChannel: {ch.mention if ch else 'Unknown'}\ntw: twitch.tv/{username}",
             inline=True
         )
     await interaction.response.send_message(embed=embed)
@@ -704,49 +807,47 @@ async def rank(interaction: discord.Interaction, member: discord.Member = None):
     xp = g["xp"].get(uid, 0)
     level = g["levels"].get(uid, 1)
     xp_needed = level * 100
+    bar_filled = int((xp / xp_needed) * 10)
+    bar = "█" * bar_filled + "░" * (10 - bar_filled)
     embed = discord.Embed(title=f"⭐ {member.display_name}'s Rank", color=discord.Color.gold())
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="Level", value=str(level))
-    embed.add_field(name="XP", value=f"{xp} / {xp_needed}")
+    embed.add_field(name="Level", value=str(level), inline=True)
+    embed.add_field(name="XP", value=f"{xp}/{xp_needed}", inline=True)
+    embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="leaderboard", description="Show the server XP leaderboard")
+@tree.command(name="leaderboard", description="Show the top 10 members by XP")
 async def leaderboard(interaction: discord.Interaction):
     g = get_guild(interaction.guild.id)
     sorted_users = sorted(g["levels"].items(), key=lambda x: (x[1], g["xp"].get(x[0], 0)), reverse=True)[:10]
     embed = discord.Embed(title="🏆 XP Leaderboard", color=discord.Color.gold())
-    medals = ["🥇", "🥈", "🥉"]
+    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
     for i, (uid, level) in enumerate(sorted_users):
         try:
             user = await bot.fetch_user(int(uid))
             name = user.display_name
         except:
-            name = f"User {uid}"
-        medal = medals[i] if i < 3 else f"#{i+1}"
-        embed.add_field(name=f"{medal} {name}", value=f"Level {level} • {g['xp'].get(uid, 0)} XP", inline=False)
+            name = f"User {uid[:6]}"
+        xp = g["xp"].get(uid, 0)
+        embed.add_field(name=f"{medals[i]} #{i+1} {name}", value=f"Level {level} • {xp} XP", inline=False)
     await interaction.response.send_message(embed=embed)
 
 # ─── GIVEAWAYS ─────────────────────────────────
 
 @tree.command(name="giveaway", description="Start a giveaway")
-@app_commands.describe(prize="What are you giving away?", duration="Duration in minutes", channel="Channel to host giveaway")
+@app_commands.describe(prize="What are you giving away?", minutes="Duration in minutes", channel="Channel to post in")
 @app_commands.default_permissions(manage_guild=True)
-async def giveaway(interaction: discord.Interaction, prize: str, duration: int, channel: discord.TextChannel = None):
+async def giveaway(interaction: discord.Interaction, prize: str, minutes: int, channel: discord.TextChannel = None):
     ch = channel or interaction.channel
-    ends = datetime.datetime.utcnow().timestamp() + (duration * 60)
-    ends_dt = datetime.datetime.utcfromtimestamp(ends).strftime("%Y-%m-%d %H:%M UTC")
-    embed = discord.Embed(
-        title="🎉 GIVEAWAY!",
-        description=f"**Prize:** {prize}\n**Ends:** {ends_dt}\n\nReact with 🎉 to enter!",
-        color=discord.Color.gold()
-    )
+    ends_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=minutes)
+    embed = discord.Embed(title="🎉 GIVEAWAY!", description=f"**Prize:** {prize}\n\nReact with 🎉 to enter!\n\n**Ends:** <t:{int(ends_at.timestamp())}:R>", color=discord.Color.gold())
     embed.set_footer(text=f"Hosted by {interaction.user}")
+    await interaction.response.send_message("✅ Giveaway started!", ephemeral=True)
     msg = await ch.send(embed=embed)
     await msg.add_reaction("🎉")
     g = get_guild(interaction.guild.id)
-    g["giveaways"][str(msg.id)] = {"prize": prize, "ends": ends, "channel": str(ch.id), "ended": False}
+    g["giveaways"][str(msg.id)] = {"prize": prize, "ends": ends_at.timestamp(), "channel": str(ch.id), "ended": False}
     save_data(db)
-    await interaction.response.send_message(f"✅ Giveaway started in {ch.mention}!", ephemeral=True)
 
 @tree.command(name="endgiveaway", description="End a giveaway early by message ID")
 @app_commands.describe(message_id="The message ID of the giveaway")
@@ -764,7 +865,7 @@ async def endgiveaway(interaction: discord.Interaction, message_id: str):
 # ─── POLLS ─────────────────────────────────────
 
 @tree.command(name="poll", description="Create a poll")
-@app_commands.describe(question="Poll question", option1="Option 1", option2="Option 2", option3="Option 3 (optional)", option4="Option 4 (optional)")
+@app_commands.describe(question="Poll question", option1="Option 1", option2="Option 2", option3="Option 3", option4="Option 4")
 async def poll(interaction: discord.Interaction, question: str, option1: str, option2: str, option3: str = None, option4: str = None):
     options = [opt for opt in [option1, option2, option3, option4] if opt]
     emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
@@ -776,7 +877,70 @@ async def poll(interaction: discord.Interaction, question: str, option1: str, op
     for i in range(len(options)):
         await msg.add_reaction(emojis[i])
 
-# ─── TICKETS ───────────────────────────────────
+# ─── TICKET PANEL ──────────────────────────────
+
+@tree.command(name="ticket-panel", description="Create a professional ticket panel in a channel")
+@app_commands.describe(
+    channel="Channel to post the ticket panel in",
+    title="Title of the ticket panel",
+    description="Description/message shown in the panel",
+    button1="First ticket button label (required)",
+    button2="Second button label (optional)",
+    button3="Third button label (optional)",
+    button4="Fourth button label (optional)",
+    button5="Fifth button label (optional)",
+    ping_role1="Role to ping when a ticket is opened (optional)",
+    ping_role2="Second role to ping (optional)",
+    ping_role3="Third role to ping (optional)"
+)
+@app_commands.default_permissions(manage_guild=True)
+async def ticket_panel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    title: str,
+    description: str,
+    button1: str,
+    button2: str = None,
+    button3: str = None,
+    button4: str = None,
+    button5: str = None,
+    ping_role1: discord.Role = None,
+    ping_role2: discord.Role = None,
+    ping_role3: discord.Role = None
+):
+    await interaction.response.defer(ephemeral=True)
+
+    buttons = [b for b in [button1, button2, button3, button4, button5] if b]
+    support_roles = [str(r.id) for r in [ping_role1, ping_role2, ping_role3] if r]
+
+    panel_id = str(int(time.time()))
+
+    embed = discord.Embed(
+        title=f"🎫 {title}",
+        description=description,
+        color=discord.Color.blurple()
+    )
+    embed.set_footer(text="Click a button below to open a ticket • Nexora Bot")
+
+    if support_roles:
+        role_mentions = ", ".join([f"<@&{r}>" for r in support_roles])
+        embed.add_field(name="👥 Support Team", value=role_mentions, inline=False)
+
+    view = TicketPanelView(buttons, panel_id, interaction.guild.id, support_roles)
+    await channel.send(embed=embed, view=view)
+
+    g = get_guild(interaction.guild.id)
+    g["ticket_panels"][panel_id] = {
+        "channel_id": str(channel.id),
+        "buttons": buttons,
+        "support_roles": support_roles,
+        "title": title
+    }
+    save_data(db)
+
+    await interaction.followup.send(f"✅ Ticket panel posted in {channel.mention}!", ephemeral=True)
+
+# ─── BASIC TICKET ──────────────────────────────
 
 @tree.command(name="ticket", description="Open a support ticket")
 @app_commands.describe(reason="Reason for your ticket")
@@ -785,11 +949,12 @@ async def ticket(interaction: discord.Interaction, reason: str = "Support needed
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
     }
     ch = await guild.create_text_channel(f"ticket-{interaction.user.name}", overwrites=overwrites)
-    embed = discord.Embed(title="🎫 Ticket Opened", description=f"**User:** {interaction.user.mention}\n**Reason:** {reason}\n\nSupport will be with you shortly!\nUse `/closeticket` to close.", color=discord.Color.green())
-    await ch.send(embed=embed)
+    embed = discord.Embed(title="🎫 Ticket Opened", description=f"**User:** {interaction.user.mention}\n**Reason:** {reason}\n\nSupport will be with you shortly!", color=discord.Color.green())
+    close_view = TicketCloseView()
+    await ch.send(embed=embed, view=close_view)
     await interaction.response.send_message(f"✅ Ticket created: {ch.mention}", ephemeral=True)
 
 @tree.command(name="closeticket", description="Close the current ticket channel")
@@ -892,15 +1057,15 @@ async def ship(interaction: discord.Interaction, user1: discord.Member, user2: d
 async def ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
     responses = [
-        f"Great question! Based on what I know: {question} — the answer really depends on context, but generally speaking, you'll want to think carefully about it!",
-        f"Hmm, '{question}' — that's a tricky one. I'd say the best approach is to keep it simple and focus on what matters most.",
-        f"Interesting! Regarding '{question}': there are many perspectives on this. The most important thing is to do your research and trust your instincts.",
-        f"For '{question}' — my best advice: break it down into smaller parts and tackle each one. You've got this!",
+        f"Great question! Based on what I know: **{question}** — the answer really depends on context, but generally speaking, you'll want to think carefully about it!",
+        f"Hmm, that's a tricky one. I'd say the best approach is to keep it simple and focus on what matters most.",
+        f"Interesting! There are many perspectives on this. The most important thing is to do your research and trust your instincts.",
+        f"My best advice: break it down into smaller parts and tackle each one. You've got this!",
     ]
     embed = discord.Embed(title="🤖 AI Response", color=discord.Color.blurple())
-    embed.add_field(name="Question", value=question, inline=False)
-    embed.add_field(name="Answer", value=random.choice(responses), inline=False)
-    embed.set_footer(text="Powered by Ghost VR Bot AI")
+    embed.add_field(name="❓ Question", value=question, inline=False)
+    embed.add_field(name="💡 Answer", value=random.choice(responses), inline=False)
+    embed.set_footer(text="Powered by Nexora Bot AI")
     await interaction.followup.send(embed=embed)
 
 # ─── AUTOMOD ───────────────────────────────────
@@ -930,22 +1095,23 @@ async def addword(interaction: discord.Interaction, word: str):
     else:
         await interaction.response.send_message(f"⚠️ `{word}` is already in the filter.", ephemeral=True)
 
-@tree.command(name="removeword", description="Remove a word from the filter")
+@tree.command(name="removeword", description="Remove a banned word from the filter")
 @app_commands.describe(word="Word to remove")
 @app_commands.default_permissions(manage_guild=True)
 async def removeword(interaction: discord.Interaction, word: str):
     g = get_guild(interaction.guild.id)
-    g["automod"]["badwords"] = [w for w in g["automod"]["badwords"] if w != word.lower()]
-    save_data(db)
-    await interaction.response.send_message(f"✅ Removed `{word}` from the word filter.", ephemeral=True)
+    if word.lower() in g["automod"]["badwords"]:
+        g["automod"]["badwords"].remove(word.lower())
+        save_data(db)
+        await interaction.response.send_message(f"✅ Removed `{word}` from the word filter.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ `{word}` is not in the filter.", ephemeral=True)
 
 # ─────────────────────────────────────────────
-#  LAUNCH
+#  RUN BOT
 # ─────────────────────────────────────────────
-if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ ERROR: DISCORD_BOT_TOKEN not set!")
-        sys.exit(1)
-    print("🚀 Starting Ghost VR's Ultimate Discord Bot v2.0...")
-    threading.Thread(target=run_server, daemon=True).start()
-    bot.run(TOKEN)
+if not TOKEN:
+    print("❌ ERROR: DISCORD_BOT_TOKEN environment variable not set!")
+    exit(1)
+
+bot.run(TOKEN)
