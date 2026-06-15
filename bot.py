@@ -626,6 +626,7 @@ async def help_cmd(interaction: discord.Interaction):
     embed.add_field(name="🎫 Tickets", value="`/ticket-panel` `/ticket` `/closeticket`", inline=False)
     embed.add_field(name="💤 AFK & Reminders", value="`/afk` `/remind`", inline=False)
     embed.add_field(name="🤖 AI", value="`/ask`", inline=False)
+    embed.add_field(name="📺 Videos", value="`/youtubelatest` `/tiktoklatest`", inline=False)
     embed.add_field(name="🔒 Automod", value="`/automod` `/addword` `/removeword`", inline=False)
     embed.add_field(name="ℹ️ Info", value="`/ping` `/uptime` `/serverinfo` `/userinfo` `/invite` `/website`", inline=False)
     embed.set_footer(text="Nexora Bot v3.0 — Twitch + YouTube + TikTok Alerts")
@@ -1337,6 +1338,146 @@ async def removeword(interaction: discord.Interaction, word: str):
         await interaction.response.send_message(f"✅ Removed `{word}` from the word filter.", ephemeral=True)
     else:
         await interaction.response.send_message(f"⚠️ `{word}` is not in the filter.", ephemeral=True)
+
+
+# ═══════════════════════════════════════════════
+#  SLASH COMMANDS — YOUTUBE & TIKTOK VIDEOS
+# ═══════════════════════════════════════════════
+
+@tree.command(name="youtubelatest", description="Get the latest videos from a YouTube channel")
+@app_commands.describe(channel_id="YouTube Channel ID (starts with UC...)", count="Number of videos to show (1-5)")
+async def youtubelatest(interaction: discord.Interaction, channel_id: str, count: int = 3):
+    await interaction.response.defer()
+    if count < 1 or count > 5:
+        count = 3
+    try:
+        rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(rss_url, headers=headers) as r:
+                if r.status != 200:
+                    await interaction.followup.send("❌ Could not fetch videos. Make sure the Channel ID is correct (starts with `UC...`).", ephemeral=True)
+                    return
+                xml_text = await r.text()
+
+        root = ET.fromstring(xml_text)
+        ns = {
+            "atom": "http://www.w3.org/2005/Atom",
+            "yt": "http://www.youtube.com/xml/schemas/2015",
+            "media": "http://search.yahoo.com/mrss/"
+        }
+        entries = root.findall("atom:entry", ns)
+        if not entries:
+            await interaction.followup.send("❌ No videos found for this channel.", ephemeral=True)
+            return
+
+        channel_name = root.find("atom:title", ns)
+        channel_name = channel_name.text if channel_name is not None else "YouTube Channel"
+
+        embed = discord.Embed(
+            title=f"📺 Latest Videos — {channel_name}",
+            color=discord.Color.red()
+        )
+
+        for entry in entries[:count]:
+            title_el = entry.find("atom:title", ns)
+            link_el = entry.find("atom:link", ns)
+            published_el = entry.find("atom:published", ns)
+            vid_id_el = entry.find("yt:videoId", ns)
+            group_el = entry.find("media:group", ns)
+
+            title = title_el.text if title_el is not None else "Unknown Title"
+            link = link_el.get("href") if link_el is not None else ""
+            published = published_el.text[:10] if published_el is not None else ""
+            vid_id = vid_id_el.text if vid_id_el is not None else ""
+
+            views = "N/A"
+            if group_el is not None:
+                community = group_el.find("media:community", ns)
+                if community is not None:
+                    stats = community.find("media:statistics", ns)
+                    if stats is not None:
+                        views = f"{int(stats.get('views', 0)):,}"
+
+            embed.add_field(
+                name=f"🎬 {title}",
+                value=f"📅 {published} • 👀 {views} views\n[▶️ Watch on YouTube]({link})",
+                inline=False
+            )
+            if vid_id:
+                embed.set_thumbnail(url=f"https://img.youtube.com/vi/{vid_id}/mqdefault.jpg")
+
+        embed.set_footer(text=f"youtube.com/channel/{channel_id} • Nexora Bot")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        print(f"[YouTubeLatest Error] {e}")
+        await interaction.followup.send("❌ Something went wrong fetching videos. Try again later.", ephemeral=True)
+
+
+@tree.command(name="tiktoklatest", description="Get the latest TikTok videos from a user")
+@app_commands.describe(username="TikTok username (without @)")
+async def tiktoklatest(interaction: discord.Interaction, username: str):
+    await interaction.response.defer()
+    username = username.lstrip("@")
+    try:
+        url = f"https://www.tiktok.com/@{username}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, allow_redirects=True) as r:
+                if r.status != 200:
+                    await interaction.followup.send(f"❌ Could not find TikTok user **@{username}**. Check the username and try again.", ephemeral=True)
+                    return
+                text = await r.text()
+
+        # Extract video data from page JSON
+        import re
+        videos = []
+
+        # Look for video items in the page source
+        video_pattern = re.findall(r'"id":"(\d+)","desc":"([^"]{1,100})"[^}]*?"playCount":(\d+)[^}]*?"diggCount":(\d+)', text)
+
+        if video_pattern:
+            for vid_id, desc, plays, likes in video_pattern[:5]:
+                videos.append({
+                    "id": vid_id,
+                    "desc": desc,
+                    "plays": int(plays),
+                    "likes": int(likes),
+                    "url": f"https://www.tiktok.com/@{username}/video/{vid_id}"
+                })
+
+        embed = discord.Embed(
+            title=f"📱 TikTok — @{username}",
+            url=f"https://www.tiktok.com/@{username}",
+            color=discord.Color.from_rgb(10, 10, 10)
+        )
+        embed.set_footer(text="tiktok.com • Nexora Bot")
+
+        if videos:
+            for v in videos[:5]:
+                embed.add_field(
+                    name=f"🎵 {v['desc'][:60]}{'...' if len(v['desc']) > 60 else ''}",
+                    value=f"▶️ {v['plays']:,} plays • ❤️ {v['likes']:,} likes\n[Watch on TikTok]({v['url']})",
+                    inline=False
+                )
+        else:
+            # Fallback: just link to profile if we can't scrape videos
+            embed.description = (
+                "Visit **@" + username + "**'s TikTok profile to see their latest videos. "
+                "[View on TikTok](https://www.tiktok.com/@" + username + ") "
+                "*TikTok limits automated access. Click the link to view directly!*"
+            )
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        print(f"[TikTokLatest Error] {e}")
+        await interaction.followup.send("❌ Something went wrong. TikTok may be blocking the request — try again later.", ephemeral=True)
 
 # ─────────────────────────────────────────────
 #  RUN BOT
