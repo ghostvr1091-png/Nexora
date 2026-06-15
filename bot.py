@@ -1,32 +1,28 @@
 #!/usr/bin/env python3
 """
-╔══════════════════════════════════════════════════════╗
-║           👑 GHOST VR'S ULTIMATE DISCORD BOT 👑       ║
-║         The most feature-packed bot ever built        ║
-╚══════════════════════════════════════════════════════╝
-
-FEATURES:
-  ✅ Moderation (ban, kick, mute, warn, purge, lockdown)
-  ✅ Auto-mod (spam filter, bad words, caps filter)
-  ✅ Announcements with rich embeds
-  ✅ Stream alerts (Twitch)
-  ✅ Welcome / Leave messages
-  ✅ XP & Leveling system with ranks
-  ✅ Giveaways
-  ✅ Polls
-  ✅ Tickets support system
-  ✅ Server stats
-  ✅ Fun commands (coinflip, 8ball, roast, ship)
-  ✅ AI chat (!ask)
-  ✅ Reminders
-  ✅ Role management
-  ✅ Embed builder
-  ✅ AFK system
-  ✅ Server info / User info
-  ✅ Ping, uptime, help
+╔══════════════════════════════════════════════════════════╗
+║         👑 GHOST VR'S ULTIMATE DISCORD BOT v2.0 👑        ║
+║      Full Slash Commands — The Best Bot Ever Built        ║
+╚══════════════════════════════════════════════════════════╝
+SLASH COMMANDS:
+  /help /ping /uptime /serverinfo /userinfo
+  /ban /kick /mute /unmute /warn /warnings /clearwarnings /purge /lockdown /unlock
+  /announce /embed
+  /setwelcome /setleave /setlog /setstreamchannel
+  /addstreamer /removestreamer
+  /rank /leaderboard
+  /giveaway /endgiveaway
+  /poll
+  /ticket /closeticket
+  /afk /back
+  /remind
+  /8ball /coinflip /roast /ship /roll
+  /ask
+  /addword /removeword /automod
 """
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import asyncio
 import aiohttp
@@ -34,27 +30,25 @@ import os
 import json
 import random
 import datetime
-import re
 import sys
 import time
 from collections import defaultdict
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 # ─────────────────────────────────────────────
 #  CONFIG
 # ─────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
-PREFIX = "!"
-BOT_VERSION = "1.0.0 — Ghost VR Edition"
+BOT_VERSION = "2.0.0 — Ghost VR Slash Edition"
 START_TIME = time.time()
-
-# Twitch config (set these env vars for stream alerts)
-TWITCH_CLIENT_ID = os.environ.get("dnraeq1qmd7uk6zve3udx3ea9j3dpe", "")
-TWITCH_CLIENT_SECRET = os.environ.get("0b0xioy36hnjwj1a1g4oxgo71pf11d", "")
+TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID", "")
+TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
 
 # ─────────────────────────────────────────────
-#  STORAGE (in-memory, persisted to JSON)
+#  STORAGE
 # ─────────────────────────────────────────────
-DATA_FILE = "/tmp/data.json"
+DATA_FILE = "/tmp/ghostvr_data.json"
 
 def load_data():
     try:
@@ -64,1150 +58,45 @@ def load_data():
         return {}
 
 def save_data(data):
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
 db = load_data()
 
-def get_guild_data(guild_id):
+def get_guild(guild_id):
     gid = str(guild_id)
     if gid not in db:
         db[gid] = {
             "xp": {}, "levels": {}, "warnings": {},
-            "muted_roles": {}, "welcome_channel": None,
+            "welcome_channel": None,
             "welcome_msg": "Welcome {user} to **{server}**! 🎉",
-            "leave_msg": "**{user}** has left the server. 😢",
-            "log_channel": None, "stream_channel": None,
-            "twitch_streamers": [], "youtube_channels": [], "tiktok_users": [],
-            "tracked_streamers": {}, "tracked_youtube": {}, "tracked_tiktok": {},
-            "giveaways": {}, "tickets": {},
+            "leave_channel": None,
+            "leave_msg": "**{user}** has left **{server}**. 😢",
+            "log_channel": None,
+            "stream_channel": None,
+            "twitch_streamers": [],
+            "tracked_streamers": {},
+            "giveaways": {},
+            "tickets": {},
             "automod": {"spam": True, "caps": True, "badwords": []},
-            "afk": {}, "reminders": [],
+            "afk": {},
+            "reminders": [],
             "announcement_channel": None,
         }
         save_data(db)
-    return db[str(guild_id)]
+    return db[gid]
 
 # ─────────────────────────────────────────────
-#  INTENTS & BOT SETUP
+#  BOT SETUP
 # ─────────────────────────────────────────────
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
-
-# Spam tracking
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+tree = bot.tree
 spam_tracker = defaultdict(list)
 
 # ─────────────────────────────────────────────
-#  EVENTS
+#  KEEP-ALIVE WEB SERVER
 # ─────────────────────────────────────────────
-
-@bot.event
-async def on_ready():
-    print(f"\n{'═'*50}")
-    print(f"  👑 Ghost VR's Ultimate Bot is ONLINE!")
-    print(f"  Bot: {bot.user} (ID: {bot.user.id})")
-    print(f"  Servers: {len(bot.guilds)}")
-    print(f"  Version: {BOT_VERSION}")
-    print(f"{'═'*50}\n")
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f"👑 {len(bot.guilds)} servers | !help"
-        )
-    )
-    check_streams.start()
-    check_reminders.start()
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setwelcome(ctx, channel: discord.TextChannel):
-    g = get_guild_data(ctx.guild.id)
-
-    g["welcome_channel"] = channel.id
-
-    g["welcome_msg"] = "👋 Hello {user} to {server}, enjoy your stay and read the rules"
-
-    save_data(db)
-
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}")
-
-    # AFK check — mention someone who is AFK
-    if message.mentions:
-        g = get_guild_data(message.guild.id)
-        for mentioned in message.mentions:
-            uid = str(mentioned.id)
-            if uid in g["afk"]:
-                reason = g["afk"][uid]
-                embed = discord.Embed(
-                    description=f"💤 **{mentioned.display_name}** is AFK: {reason}",
-                    color=discord.Color.orange()
-                )
-                await message.channel.send(embed=embed)
-
-    # AFK return
-    g = get_guild_data(message.guild.id)
-    uid = str(message.author.id)
-    if uid in g["afk"]:
-        del g["afk"][uid]
-        save_data(db)
-        await message.channel.send(f"✅ Welcome back {message.author.mention}, I removed your AFK.")
-
-    # Auto-mod
-    await automod_check(message)
-
-    # XP gain
-    await add_xp(message)
-
-    await bot.process_commands(message)
-
-async def automod_check(message):
-    if not message.guild:
-        return
-    g = get_guild_data(message.guild.id)
-    am = g.get("automod", {})
-
-    # Spam filter
-    if am.get("spam"):
-        uid = str(message.author.id)
-        now = time.time()
-        spam_tracker[uid] = [t for t in spam_tracker[uid] if now - t < 5]
-        spam_tracker[uid].append(now)
-        if len(spam_tracker[uid]) >= 5:
-            await message.delete()
-            await message.channel.send(f"⚠️ {message.author.mention} slow down! No spamming.", delete_after=5)
-            return
-
-    # Caps filter (>70% caps in 10+ char message)
-    if am.get("caps") and len(message.content) > 10:
-        caps_ratio = sum(1 for c in message.content if c.isupper()) / len(message.content)
-        if caps_ratio > 0.7:
-            await message.delete()
-            await message.channel.send(f"⚠️ {message.author.mention} please don't use excessive caps.", delete_after=5)
-            return
-
-    # Bad words filter
-    badwords = am.get("badwords", [])
-    if badwords:
-        content_lower = message.content.lower()
-        for word in badwords:
-            if word.lower() in content_lower:
-                await message.delete()
-                await message.channel.send(f"⚠️ {message.author.mention} watch your language!", delete_after=5)
-                return
-
-async def add_xp(message):
-    if not message.guild:
-        return
-    g = get_guild_data(message.guild.id)
-    uid = str(message.author.id)
-    if uid not in g["xp"]:
-        g["xp"][uid] = 0
-        g["levels"][uid] = 1
-    xp_gain = random.randint(5, 15)
-    g["xp"][uid] += xp_gain
-    level = g["levels"][uid]
-    xp_needed = level * 100
-    if g["xp"][uid] >= xp_needed:
-        g["xp"][uid] -= xp_needed
-        g["levels"][uid] += 1
-        new_level = g["levels"][uid]
-        save_data(db)
-        embed = discord.Embed(
-            title="🎉 Level Up!",
-            description=f"{message.author.mention} just reached **Level {new_level}**! 🚀",
-            color=discord.Color.gold()
-        )
-        await message.channel.send(embed=embed)
-        return
-    save_data(db)
-
-# ─────────────────────────────────────────────
-#  MODERATION COMMANDS
-# ─────────────────────────────────────────────
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
-    await member.ban(reason=reason)
-    embed = discord.Embed(title="🔨 Banned", description=f"**{member}** has been banned.\n**Reason:** {reason}", color=discord.Color.red())
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    await member.kick(reason=reason)
-    embed = discord.Embed(title="👢 Kicked", description=f"**{member}** has been kicked.\n**Reason:** {reason}", color=discord.Color.orange())
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def mute(ctx, member: discord.Member, duration: int = 0, *, reason="No reason provided"):
-    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-    if not muted_role:
-        muted_role = await ctx.guild.create_role(name="Muted")
-        for channel in ctx.guild.channels:
-            await channel.set_permissions(muted_role, send_messages=False, speak=False)
-    await member.add_roles(muted_role, reason=reason)
-    embed = discord.Embed(title="🔇 Muted", description=f"**{member}** has been muted.\n**Reason:** {reason}", color=discord.Color.dark_gray())
-    if duration > 0:
-        embed.add_field(name="Duration", value=f"{duration} minutes")
-    await ctx.send(embed=embed)
-    if duration > 0:
-        await asyncio.sleep(duration * 60)
-        await member.remove_roles(muted_role)
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def unmute(ctx, member: discord.Member):
-    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-    if muted_role and muted_role in member.roles:
-        await member.remove_roles(muted_role)
-        await ctx.send(f"✅ {member.mention} has been unmuted.")
-    else:
-        await ctx.send("⚠️ That member isn't muted.")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
-    g = get_guild_data(ctx.guild.id)
-    uid = str(member.id)
-    if uid not in g["warnings"]:
-        g["warnings"][uid] = []
-    g["warnings"][uid].append({"reason": reason, "date": str(datetime.datetime.utcnow()), "by": str(ctx.author)})
-    save_data(db)
-    count = len(g["warnings"][uid])
-    embed = discord.Embed(title="⚠️ Warning Issued", description=f"**{member}** has been warned.\n**Reason:** {reason}\n**Total Warnings:** {count}", color=discord.Color.yellow())
-    await ctx.send(embed=embed)
-    if count >= 3:
-        await ctx.send(f"⚠️ {member.mention} has reached **{count} warnings**! Consider taking action.")
-
-@bot.command()
-async def warnings(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    g = get_guild_data(ctx.guild.id)
-    uid = str(member.id)
-    warns = g["warnings"].get(uid, [])
-    if not warns:
-        await ctx.send(f"✅ {member.display_name} has no warnings.")
-        return
-    embed = discord.Embed(title=f"⚠️ Warnings for {member.display_name}", color=discord.Color.yellow())
-    for i, w in enumerate(warns, 1):
-        embed.add_field(name=f"Warning #{i}", value=f"**Reason:** {w['reason']}\n**By:** {w['by']}\n**Date:** {w['date'][:10]}", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def clearwarnings(ctx, member: discord.Member):
-    g = get_guild_data(ctx.guild.id)
-    g["warnings"][str(member.id)] = []
-    save_data(db)
-    await ctx.send(f"✅ Cleared all warnings for {member.mention}.")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def purge(ctx, amount: int):
-    if amount > 200:
-        await ctx.send("⚠️ Max purge is 200 messages.")
-        return
-    deleted = await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f"🗑️ Deleted **{len(deleted)-1}** messages.", delete_after=5)
-
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def lockdown(ctx, *, reason="No reason provided"):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
-    embed = discord.Embed(title="🔒 Channel Locked", description=f"This channel has been locked.\n**Reason:** {reason}", color=discord.Color.red())
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(manage_channels=True)
-async def unlock(ctx):
-    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
-    await ctx.send("🔓 Channel unlocked!")
-
-@bot.command()
-@commands.has_permissions(manage_nicknames=True)
-async def nick(ctx, member: discord.Member, *, nickname):
-    await member.edit(nick=nickname)
-    await ctx.send(f"✅ Changed {member.mention}'s nickname to **{nickname}**.")
-
-# ─────────────────────────────────────────────
-#  ANNOUNCEMENTS
-# ─────────────────────────────────────────────
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def announce(ctx, channel: discord.TextChannel, *, message):
-    embed = discord.Embed(
-        title="📢 Announcement",
-        description=message,
-        color=discord.Color.blurple(),
-        timestamp=datetime.datetime.utcnow()
-    )
-    embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
-    embed.set_footer(text=f"Announced by {ctx.author.display_name}")
-    await channel.send("@everyone", embed=embed)
-    await ctx.send(f"✅ Announcement sent to {channel.mention}!")
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def embed(ctx, channel: discord.TextChannel, title, *, description):
-    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
-    embed.set_footer(text=f"By {ctx.author.display_name}")
-    await channel.send(embed=embed)
-    await ctx.send(f"✅ Embed sent to {channel.mention}!")
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setwelcome(ctx, channel: discord.TextChannel, *, message=None):
-    g = get_guild_data(ctx.guild.id)
-    g["welcome_channel"] = str(channel.id)
-    if message:
-        g["welcome_msg"] = message
-    save_data(db)
-    await ctx.send(f"✅ Welcome channel set to {channel.mention}!\nUse `{{user}}` for mention, `{{server}}` for server name.")
-
-# ─────────────────────────────────────────────
-#  STREAM ALERTS
-# ─────────────────────────────────────────────
-
-import re
-from discord.ext import commands
-
-STREAM_REGEX = re.compile(
-    r"(https?://)?(www\.)?(youtube\.com|youtu\.be|twitch\.tv|tiktok\.com)/.+"
-)
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setstream(ctx, link: str):
-    g = get_guild_data(ctx.guild.id)
-
-    # validate link
-    if not STREAM_REGEX.match(link):
-        return await ctx.send("❌ Please provide a valid YouTube, Twitch, or TikTok link.")
-
-    g["stream_link"] = link
-    save_data(db)
-
-    await ctx.send(f"✅ Stream link saved: {link}")
-
-# ── TWITCH ──────────────────────────────────────────────────────────
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def addtwitch(ctx, username: str):
-    g = get_guild_data(ctx.guild.id)
-    if username.lower() not in g["twitch_streamers"]:
-        g["twitch_streamers"].append(username.lower())
-        save_data(db)
-        await ctx.send(f"✅ Now tracking **{username}** on Twitch! 🟣")
-    else:
-        await ctx.send(f"⚠️ Already tracking **{username}** on Twitch.")
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def removetwitch(ctx, username: str):
-    g = get_guild_data(ctx.guild.id)
-    if username.lower() in g["twitch_streamers"]:
-        g["twitch_streamers"].remove(username.lower())
-        save_data(db)
-        await ctx.send(f"✅ Stopped tracking **{username}** on Twitch.")
-    else:
-        await ctx.send("⚠️ That Twitch streamer wasn't being tracked.")
-
-# ── YOUTUBE ──────────────────────────────────────────────────────────
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def addyoutube(ctx, *, channel_name: str):
-    """Add a YouTube channel to track for live streams. Use their @handle or channel name."""
-    g = get_guild_data(ctx.guild.id)
-    if channel_name.lower() not in g["youtube_channels"]:
-        g["youtube_channels"].append(channel_name.lower())
-        save_data(db)
-        await ctx.send(f"✅ Now tracking **{channel_name}** on YouTube! 🔴\n⚠️ Note: Set YOUTUBE_API_KEY env var for live stream detection.")
-    else:
-        await ctx.send(f"⚠️ Already tracking **{channel_name}** on YouTube.")
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def removeyoutube(ctx, *, channel_name: str):
-    g = get_guild_data(ctx.guild.id)
-    if channel_name.lower() in g["youtube_channels"]:
-        g["youtube_channels"].remove(channel_name.lower())
-        save_data(db)
-        await ctx.send(f"✅ Stopped tracking **{channel_name}** on YouTube.")
-    else:
-        await ctx.send("⚠️ That YouTube channel wasn't being tracked.")
-
-# ── TIKTOK ──────────────────────────────────────────────────────────
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def addtiktok(ctx, username: str):
-    """Add a TikTok user to track for LIVE streams."""
-    g = get_guild_data(ctx.guild.id)
-    u = username.lstrip("@").lower()
-    if u not in g["tiktok_users"]:
-        g["tiktok_users"].append(u)
-        save_data(db)
-        await ctx.send(f"✅ Now tracking **@{u}** on TikTok! 🎵")
-    else:
-        await ctx.send(f"⚠️ Already tracking **@{u}** on TikTok.")
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def removetiktok(ctx, username: str):
-    g = get_guild_data(ctx.guild.id)
-    u = username.lstrip("@").lower()
-    if u in g["tiktok_users"]:
-        g["tiktok_users"].remove(u)
-        save_data(db)
-        await ctx.send(f"✅ Stopped tracking **@{u}** on TikTok.")
-    else:
-        await ctx.send("⚠️ That TikTok user wasn't being tracked.")
-
-# ── LIST ALL STREAMERS ───────────────────────────────────────────────
-@bot.command()
-async def streamers(ctx):
-    g = get_guild_data(ctx.guild.id)
-    embed = discord.Embed(title="🎮 Tracked Streamers", color=discord.Color.purple())
-    twitch_list = g.get("twitch_streamers", [])
-    yt_list = g.get("youtube_channels", [])
-    tt_list = g.get("tiktok_users", [])
-    embed.add_field(
-        name="🟣 Twitch",
-        value="\n".join(f"• {s}" for s in twitch_list) if twitch_list else "None",
-        inline=False
-    )
-    embed.add_field(
-        name="🔴 YouTube",
-        value="\n".join(f"• {s}" for s in yt_list) if yt_list else "None",
-        inline=False
-    )
-    embed.add_field(
-        name="🎵 TikTok",
-        value="\n".join(f"• @{s}" for s in tt_list) if tt_list else "None",
-        inline=False
-    )
-    if not twitch_list and not yt_list and not tt_list:
-        embed.description = "No streamers tracked yet! Use `!addtwitch`, `!addyoutube`, or `!addtiktok`."
-    await ctx.send(embed=embed)
-
-# ── STREAM CHECKER LOOP ──────────────────────────────────────────────
-@tasks.loop(minutes=5)
-async def check_streams():
-    await check_twitch_streams()
-    await check_youtube_streams()
-    await check_tiktok_streams()
-
-async def check_twitch_streams():
-    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
-        return
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://id.twitch.tv/oauth2/token",
-                params={"client_id": TWITCH_CLIENT_ID, "client_secret": TWITCH_CLIENT_SECRET, "grant_type": "client_credentials"}
-            ) as r:
-                token_data = await r.json()
-                access_token = token_data.get("access_token")
-                if not access_token:
-                    return
-
-            for guild in bot.guilds:
-                g = get_guild_data(guild.id)
-                streamers = g.get("twitch_streamers", [])
-                ch_id = g.get("stream_channel")
-                if not streamers or not ch_id:
-                    continue
-                channel = bot.get_channel(int(ch_id))
-                if not channel:
-                    continue
-
-                for streamer in streamers:
-                    try:
-                        async with session.get(
-                            f"https://api.twitch.tv/helix/streams?user_login={streamer}",
-                            headers={"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {access_token}"}
-                        ) as r:
-                            data = await r.json()
-                            streams = data.get("data", [])
-                            was_live = g["tracked_streamers"].get(streamer, False)
-                            is_live = len(streams) > 0
-
-                            if is_live and not was_live:
-                                stream = streams[0]
-                                embed = discord.Embed(
-                                    title=f"🟣 {streamer} is LIVE on Twitch!",
-                                    description=f"**{stream.get('title', 'No title')}**",
-                                    url=f"https://twitch.tv/{streamer}",
-                                    color=discord.Color.purple()
-                                )
-                                embed.add_field(name="🎮 Game", value=stream.get("game_name", "Unknown"))
-                                embed.add_field(name="👥 Viewers", value=f"{stream.get('viewer_count', 0):,}")
-                                thumb = stream.get("thumbnail_url", "").replace("{width}", "320").replace("{height}", "180")
-                                if thumb:
-                                    embed.set_image(url=thumb)
-                                embed.set_footer(text="Twitch Stream Alert • Ghost VR Bot")
-                                await channel.send(f"@everyone 🟣 **{streamer}** just went live on Twitch!", embed=embed)
-                                g["tracked_streamers"][streamer] = True
-                            elif not is_live:
-                                g["tracked_streamers"][streamer] = False
-                    except Exception as e:
-                        print(f"[Twitch] Error checking {streamer}: {e}")
-
-                save_data(db)
-    except Exception as e:
-        print(f"[Twitch Check Error] {e}")
-
-async def check_youtube_streams():
-    """Check YouTube live streams using RSS feed (no API key needed for basic check)."""
-    YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
-    try:
-        async with aiohttp.ClientSession() as session:
-            for guild in bot.guilds:
-                g = get_guild_data(guild.id)
-                channels_list = g.get("youtube_channels", [])
-                ch_id = g.get("stream_channel")
-                if not channels_list or not ch_id:
-                    continue
-                alert_channel = bot.get_channel(int(ch_id))
-                if not alert_channel:
-                    continue
-
-                for yt_channel in channels_list:
-                    try:
-                        if YOUTUBE_API_KEY:
-                            # Search for live streams using YouTube Data API
-                            search_url = (
-                                f"https://www.googleapis.com/youtube/v3/search"
-                                f"?part=snippet&channelId={yt_channel}&eventType=live"
-                                f"&type=video&key={YOUTUBE_API_KEY}"
-                            )
-                            async with session.get(search_url) as r:
-                                if r.status == 200:
-                                    data = await r.json()
-                                    items = data.get("items", [])
-                                    was_live = g["tracked_youtube"].get(yt_channel, False)
-                                    is_live = len(items) > 0
-
-                                    if is_live and not was_live:
-                                        item = items[0]
-                                        snippet = item["snippet"]
-                                        video_id = item["id"]["videoId"]
-                                        embed = discord.Embed(
-                                            title=f"🔴 {snippet['channelTitle']} is LIVE on YouTube!",
-                                            description=f"**{snippet['title']}**",
-                                            url=f"https://youtube.com/watch?v={video_id}",
-                                            color=discord.Color.red()
-                                        )
-                                        thumb = snippet.get("thumbnails", {}).get("high", {}).get("url", "")
-                                        if thumb:
-                                            embed.set_image(url=thumb)
-                                        embed.set_footer(text="YouTube Stream Alert • Ghost VR Bot")
-                                        await alert_channel.send(f"@everyone 🔴 **{snippet['channelTitle']}** is LIVE on YouTube!", embed=embed)
-                                        g["tracked_youtube"][yt_channel] = True
-                                    elif not is_live:
-                                        g["tracked_youtube"][yt_channel] = False
-                        else:
-                            # RSS feed fallback — checks recent uploads
-                            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={yt_channel}"
-                            async with session.get(rss_url) as r:
-                                if r.status == 200:
-                                    text = await r.text()
-                                    # Basic check for live indicator in feed
-                                    if "yt:videoId" in text:
-                                        import re as _re
-                                        video_ids = _re.findall(r"<yt:videoId>([^<]+)</yt:videoId>", text)
-                                        titles = _re.findall(r"<title>([^<]+)</title>", text)
-                                        if video_ids:
-                                            latest_id = video_ids[0]
-                                            latest_title = titles[1] if len(titles) > 1 else "New Video"
-                                            last_tracked = g["tracked_youtube"].get(yt_channel, "")
-                                            if latest_id != last_tracked:
-                                                embed = discord.Embed(
-                                                    title=f"🔴 New YouTube Upload!",
-                                                    description=f"**{latest_title}**",
-                                                    url=f"https://youtube.com/watch?v={latest_id}",
-                                                    color=discord.Color.red()
-                                                )
-                                                embed.add_field(name="Channel", value=yt_channel)
-                                                embed.set_footer(text="YouTube Alert • Ghost VR Bot")
-                                                await alert_channel.send(f"@everyone 🔴 **{yt_channel}** posted on YouTube!", embed=embed)
-                                                g["tracked_youtube"][yt_channel] = latest_id
-                    except Exception as e:
-                        print(f"[YouTube] Error checking {yt_channel}: {e}")
-
-                save_data(db)
-    except Exception as e:
-        print(f"[YouTube Check Error] {e}")
-
-async def check_tiktok_streams():
-    """Check TikTok live status by scraping public profile page."""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        async with aiohttp.ClientSession(headers=headers) as session:
-            for guild in bot.guilds:
-                g = get_guild_data(guild.id)
-                tiktok_users = g.get("tiktok_users", [])
-                ch_id = g.get("stream_channel")
-                if not tiktok_users or not ch_id:
-                    continue
-                alert_channel = bot.get_channel(int(ch_id))
-                if not alert_channel:
-                    continue
-
-                for user in tiktok_users:
-                    try:
-                        url = f"https://www.tiktok.com/@{user}/live"
-                        async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                            text = await r.text()
-                            was_live = g["tracked_tiktok"].get(user, False)
-                            # TikTok redirects away from /live if not live
-                            is_live = (r.status == 200 and "LIVE" in text and "liveRoomId" in text)
-
-                            if is_live and not was_live:
-                                embed = discord.Embed(
-                                    title=f"🎵 @{user} is LIVE on TikTok!",
-                                    description=f"**@{user}** just started a TikTok LIVE! Come watch! 🎉",
-                                    url=f"https://www.tiktok.com/@{user}/live",
-                                    color=discord.Color.from_rgb(0, 0, 0)
-                                )
-                                embed.set_footer(text="TikTok Stream Alert • Ghost VR Bot")
-                                await alert_channel.send(f"@everyone 🎵 **@{user}** is LIVE on TikTok!", embed=embed)
-                                g["tracked_tiktok"][user] = True
-                            elif not is_live:
-                                g["tracked_tiktok"][user] = False
-                    except Exception as e:
-                        print(f"[TikTok] Error checking {user}: {e}")
-
-                save_data(db)
-    except Exception as e:
-        print(f"[TikTok Check Error] {e}")
-
-# ─────────────────────────────────────────────
-#  XP / LEVELING
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def rank(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    g = get_guild_data(ctx.guild.id)
-    uid = str(member.id)
-    xp = g["xp"].get(uid, 0)
-    level = g["levels"].get(uid, 1)
-    xp_needed = level * 100
-    bar_filled = int((xp / xp_needed) * 20)
-    bar = "█" * bar_filled + "░" * (20 - bar_filled)
-    embed = discord.Embed(title=f"📊 {member.display_name}'s Rank", color=discord.Color.gold())
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="Level", value=str(level))
-    embed.add_field(name="XP", value=f"{xp}/{xp_needed}")
-    embed.add_field(name="Progress", value=f"`{bar}`", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def leaderboard(ctx):
-    g = get_guild_data(ctx.guild.id)
-    xp_data = g.get("xp", {})
-    sorted_users = sorted(xp_data.items(), key=lambda x: (g["levels"].get(x[0], 1), x[1]), reverse=True)[:10]
-    embed = discord.Embed(title="🏆 Server Leaderboard", color=discord.Color.gold())
-    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-    for i, (uid, xp) in enumerate(sorted_users):
-        member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else f"User#{uid[:4]}"
-        level = g["levels"].get(uid, 1)
-        embed.add_field(name=f"{medals[i]} #{i+1} {name}", value=f"Level {level} • {xp} XP", inline=False)
-    await ctx.send(embed=embed)
-
-# ─────────────────────────────────────────────
-#  GIVEAWAYS
-# ─────────────────────────────────────────────
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def giveaway(ctx, duration: int, winners: int, *, prize: str):
-    end_time = datetime.datetime.utcnow() + datetime.timedelta(minutes=duration)
-    embed = discord.Embed(
-        title="🎉 GIVEAWAY!",
-        description=f"**Prize:** {prize}\n\nReact with 🎉 to enter!\n\n**Winners:** {winners}\n**Ends:** <t:{int(end_time.timestamp())}:R>",
-        color=discord.Color.gold(),
-        timestamp=end_time
-    )
-    embed.set_footer(text="Ends at")
-    msg = await ctx.send(embed=embed)
-    await msg.add_reaction("🎉")
-
-    g = get_guild_data(ctx.guild.id)
-    g["giveaways"][str(msg.id)] = {
-        "prize": prize, "winners": winners,
-        "end_time": end_time.isoformat(), "channel_id": str(ctx.channel.id)
-    }
-    save_data(db)
-
-    await asyncio.sleep(duration * 60)
-
-    msg = await ctx.channel.fetch_message(msg.id)
-    reaction = discord.utils.get(msg.reactions, emoji="🎉")
-    users = [u async for u in reaction.users() if not u.bot]
-
-    if not users:
-        await ctx.send("🎉 No one entered the giveaway!")
-        return
-
-    actual_winners = random.sample(users, min(winners, len(users)))
-    winner_mentions = ", ".join(w.mention for w in actual_winners)
-    win_embed = discord.Embed(
-        title="🎉 Giveaway Ended!",
-        description=f"**Prize:** {prize}\n**Winners:** {winner_mentions}\n\nCongratulations! 🥳",
-        color=discord.Color.gold()
-    )
-    await ctx.send(embed=win_embed)
-
-# ─────────────────────────────────────────────
-#  POLLS
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def poll(ctx, question, *options):
-    if len(options) < 2:
-        await ctx.send("⚠️ Provide at least 2 options. Example: `!poll \"Best color?\" Red Blue Green`")
-        return
-    if len(options) > 10:
-        await ctx.send("⚠️ Max 10 options.")
-        return
-    number_emojis = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    description = "\n".join(f"{number_emojis[i]} {opt}" for i, opt in enumerate(options))
-    embed = discord.Embed(title=f"📊 {question}", description=description, color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
-    embed.set_footer(text=f"Poll by {ctx.author.display_name}")
-    msg = await ctx.send(embed=embed)
-    for i in range(len(options)):
-        await msg.add_reaction(number_emojis[i])
-
-# ─────────────────────────────────────────────
-#  TICKETS
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def ticket(ctx, *, reason="No reason specified"):
-    guild = ctx.guild
-    category = discord.utils.get(guild.categories, name="Support Tickets")
-    if not category:
-        category = await guild.create_category("Support Tickets")
-
-    ticket_channel = await guild.create_text_channel(
-        f"ticket-{ctx.author.name}",
-        category=category,
-        overwrites={
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-    )
-    embed = discord.Embed(
-        title="🎟️ Support Ticket",
-        description=f"Thank you {ctx.author.mention}! Support will be with you shortly.\n**Reason:** {reason}\n\nType `!closeticket` to close this ticket.",
-        color=discord.Color.green()
-    )
-    await ticket_channel.send(embed=embed)
-    await ctx.send(f"✅ Ticket created: {ticket_channel.mention}", delete_after=10)
-
-@bot.command()
-async def closeticket(ctx):
-    if "ticket-" in ctx.channel.name:
-        await ctx.send("🔒 Closing ticket in 5 seconds...")
-        await asyncio.sleep(5)
-        await ctx.channel.delete()
-    else:
-        await ctx.send("⚠️ This isn't a ticket channel.")
-
-# ─────────────────────────────────────────────
-#  FUN COMMANDS
-# ─────────────────────────────────────────────
-
-@bot.command(name="8ball")
-async def eightball(ctx, *, question):
-    responses = [
-        "✅ It is certain.", "✅ Absolutely yes!", "✅ Without a doubt.",
-        "✅ Yes, definitely!", "✅ Signs point to yes.",
-        "❓ Reply hazy, try again.", "❓ Ask again later.", "❓ Cannot predict now.",
-        "❌ Don't count on it.", "❌ Very doubtful.", "❌ My sources say no.", "❌ Outlook not so good."
-    ]
-    embed = discord.Embed(title="🎱 8-Ball", color=discord.Color.dark_purple())
-    embed.add_field(name="Question", value=question, inline=False)
-    embed.add_field(name="Answer", value=random.choice(responses), inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def coinflip(ctx):
-    result = random.choice(["🪙 Heads!", "🪙 Tails!"])
-    await ctx.send(result)
-
-@bot.command()
-async def roll(ctx, sides: int = 6):
-    result = random.randint(1, sides)
-    await ctx.send(f"🎲 You rolled a **{result}** (d{sides})")
-
-@bot.command()
-async def ship(ctx, user1: discord.Member, user2: discord.Member = None):
-    user2 = user2 or ctx.author
-    score = random.randint(0, 100)
-    bar_filled = int(score / 10) * 2
-    bar = "❤️" * (bar_filled // 2) + "🖤" * (10 - bar_filled // 2)
-    embed = discord.Embed(title="💘 Love Meter", color=discord.Color.red())
-    embed.description = f"**{user1.display_name}** & **{user2.display_name}**\n\n{bar}\n\n**{score}% compatible!**"
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def roast(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    roasts = [
-        f"{member.mention}, you're the reason they put instructions on shampoo.",
-        f"{member.mention}, I'd agree with you but then we'd both be wrong.",
-        f"{member.mention}, your WiFi password is probably your only secret.",
-        f"{member.mention}, you have your entire life to be a jerk. Why not take today off?",
-        f"{member.mention}, I'd call you a tool, but even tools are useful.",
-    ]
-    await ctx.send(random.choice(roasts))
-
-@bot.command()
-async def hug(ctx, member: discord.Member):
-    await ctx.send(f"🤗 {ctx.author.mention} hugs {member.mention}!")
-
-@bot.command()
-async def slap(ctx, member: discord.Member):
-    await ctx.send(f"👋 {ctx.author.mention} slapped {member.mention}! That's gotta hurt!")
-
-@bot.command()
-async def meme(ctx):
-    async with aiohttp.ClientSession() as session:
-        async with session.get("https://meme-api.com/gimme") as r:
-            if r.status == 200:
-                data = await r.json()
-                embed = discord.Embed(title=data["title"], color=discord.Color.random())
-                embed.set_image(url=data["url"])
-                embed.set_footer(text=f"r/{data['subreddit']} • 👍 {data['ups']}")
-                await ctx.send(embed=embed)
-            else:
-                await ctx.send("Couldn't fetch a meme right now, try again!")
-
-@bot.command()
-async def joke(ctx):
-    async with aiohttp.ClientSession() as session:
-        async with session.get("https://official-joke-api.appspot.com/random_joke") as r:
-            if r.status == 200:
-                data = await r.json()
-                embed = discord.Embed(title="😂 Joke", description=f"{data['setup']}\n\n||{data['punchline']}||", color=discord.Color.green())
-                await ctx.send(embed=embed)
-
-# ─────────────────────────────────────────────
-#  INFO COMMANDS
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def serverinfo(ctx):
-    g = ctx.guild
-    embed = discord.Embed(title=f"📊 {g.name}", color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
-    if g.icon:
-        embed.set_thumbnail(url=g.icon.url)
-    embed.add_field(name="👑 Owner", value=str(g.owner))
-    embed.add_field(name="👥 Members", value=str(g.member_count))
-    embed.add_field(name="💬 Channels", value=str(len(g.channels)))
-    embed.add_field(name="🎭 Roles", value=str(len(g.roles)))
-    embed.add_field(name="📅 Created", value=g.created_at.strftime("%b %d, %Y"))
-    embed.add_field(name="🆔 ID", value=str(g.id))
-    embed.add_field(name="🚀 Boosts", value=str(g.premium_subscription_count))
-    embed.add_field(name="😀 Emojis", value=str(len(g.emojis)))
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def userinfo(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    roles = [r.mention for r in member.roles if r.name != "@everyone"]
-    embed = discord.Embed(title=f"👤 {member.display_name}", color=member.color, timestamp=datetime.datetime.utcnow())
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="🆔 ID", value=str(member.id))
-    embed.add_field(name="📅 Joined Server", value=member.joined_at.strftime("%b %d, %Y") if member.joined_at else "Unknown")
-    embed.add_field(name="📅 Account Created", value=member.created_at.strftime("%b %d, %Y"))
-    embed.add_field(name="🎭 Roles", value=" ".join(roles) if roles else "None", inline=False)
-    embed.add_field(name="🤖 Bot", value="Yes" if member.bot else "No")
-    g = get_guild_data(ctx.guild.id)
-    uid = str(member.id)
-    embed.add_field(name="⚡ Level", value=str(g["levels"].get(uid, 1)))
-    embed.add_field(name="✨ XP", value=str(g["xp"].get(uid, 0)))
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def ping(ctx):
-    latency = round(bot.latency * 1000)
-    embed = discord.Embed(title="🏓 Pong!", description=f"Latency: **{latency}ms**", color=discord.Color.green())
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def uptime(ctx):
-    seconds = int(time.time() - START_TIME)
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-    embed = discord.Embed(title="⏱️ Uptime", description=f"**{days}d {hours}h {minutes}m {seconds}s**", color=discord.Color.green())
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def botinfo(ctx):
-    embed = discord.Embed(title="🤖 Bot Info", color=discord.Color.blurple())
-    embed.add_field(name="Version", value=BOT_VERSION)
-    embed.add_field(name="Servers", value=str(len(bot.guilds)))
-    embed.add_field(name="Users", value=str(sum(g.member_count for g in bot.guilds)))
-    embed.add_field(name="Commands", value=str(len(bot.commands)))
-    embed.add_field(name="Prefix", value=PREFIX)
-    embed.set_footer(text="Made with ❤️ for Ghost VR")
-    await ctx.send(embed=embed)
-
-# ─────────────────────────────────────────────
-#  UTILITY
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def afk(ctx, *, reason="AFK"):
-    g = get_guild_data(ctx.guild.id)
-    g["afk"][str(ctx.author.id)] = reason
-    save_data(db)
-    await ctx.send(f"💤 {ctx.author.mention} is now AFK: **{reason}**")
-
-@bot.command()
-async def remind(ctx, duration: int, unit: str, *, reminder: str):
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    if unit not in units:
-        await ctx.send("⚠️ Use: s (seconds), m (minutes), h (hours), d (days). Example: `!remind 30 m Take a break`")
-        return
-    seconds = duration * units[unit]
-    await ctx.send(f"⏰ I'll remind you in **{duration}{unit}**: {reminder}")
-    await asyncio.sleep(seconds)
-    await ctx.send(f"⏰ {ctx.author.mention} Reminder: **{reminder}**")
-
-@bot.command()
-async def avatar(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    embed = discord.Embed(title=f"🖼️ {member.display_name}'s Avatar", color=discord.Color.blurple())
-    embed.set_image(url=member.display_avatar.url)
-    await ctx.send(embed=embed)
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def giverole(ctx, member: discord.Member, *, role: discord.Role):
-    await member.add_roles(role)
-    await ctx.send(f"✅ Gave {role.mention} to {member.mention}.")
-
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def removerole(ctx, member: discord.Member, *, role: discord.Role):
-    await member.remove_roles(role)
-    await ctx.send(f"✅ Removed {role.mention} from {member.mention}.")
-
-@bot.command()
-async def ask(ctx, *, question):
-    """Simple AI-powered Q&A"""
-    thinking_msg = await ctx.send("🤔 Thinking...")
-    # Smart rule-based responses + fun fallback
-    q = question.lower()
-    if any(w in q for w in ["hello", "hi", "hey", "sup"]):
-        answer = f"Hey {ctx.author.display_name}! 👋 What's up?"
-    elif "how are you" in q:
-        answer = "I'm doing great, thanks for asking! Ready to help 🚀"
-    elif "who made you" in q or "who created you" in q:
-        answer = "I was built by **Ghost VR** — the most powerful Discord bot ever made! 👑"
-    elif "what can you do" in q:
-        answer = "Type `!help` to see everything I can do — and it's a LOT! 😎"
-    elif "time" in q:
-        answer = f"Current UTC time: **{datetime.datetime.utcnow().strftime('%H:%M:%S')}**"
-    elif "date" in q:
-        answer = f"Today is **{datetime.datetime.utcnow().strftime('%A, %B %d, %Y')}** (UTC)"
-    else:
-        answer = f"That's a great question! Unfortunately I can't search the internet, but your question was: *{question}*. Try asking your community! 🤝"
-    embed = discord.Embed(title="🤖 Answer", description=answer, color=discord.Color.blurple())
-    embed.set_footer(text=f"Asked by {ctx.author.display_name}")
-    await thinking_msg.edit(content=None, embed=embed)
-
-@tasks.loop(minutes=1)
-async def check_reminders():
-    pass  # Handled inline with asyncio.sleep in !remind
-
-# ─────────────────────────────────────────────
-#  AUTOMOD CONFIG
-# ─────────────────────────────────────────────
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def automod(ctx, setting: str, value: str = None):
-    g = get_guild_data(ctx.guild.id)
-    am = g["automod"]
-    setting = setting.lower()
-    if setting == "spam":
-        am["spam"] = value != "off"
-        await ctx.send(f"✅ Spam filter: **{'ON' if am['spam'] else 'OFF'}**")
-    elif setting == "caps":
-        am["caps"] = value != "off"
-        await ctx.send(f"✅ Caps filter: **{'ON' if am['caps'] else 'OFF'}**")
-    elif setting == "addbadword" and value:
-        if value not in am["badwords"]:
-            am["badwords"].append(value.lower())
-        await ctx.send(f"✅ Added `{value}` to bad words list.")
-    elif setting == "removebadword" and value:
-        if value.lower() in am["badwords"]:
-            am["badwords"].remove(value.lower())
-        await ctx.send(f"✅ Removed `{value}` from bad words list.")
-    elif setting == "status":
-        embed = discord.Embed(title="🛡️ Auto-Mod Status", color=discord.Color.green())
-        embed.add_field(name="Spam Filter", value="✅ ON" if am["spam"] else "❌ OFF")
-        embed.add_field(name="Caps Filter", value="✅ ON" if am["caps"] else "❌ OFF")
-        embed.add_field(name="Bad Words", value=str(len(am["badwords"])) + " words")
-        await ctx.send(embed=embed)
-    else:
-        await ctx.send("⚠️ Usage: `!automod spam on/off` | `!automod caps on/off` | `!automod addbadword <word>` | `!automod status`")
-    save_data(db)
-
-# ─────────────────────────────────────────────
-#  HELP COMMAND
-# ─────────────────────────────────────────────
-
-@bot.command()
-async def help(ctx, category: str = None):
-    if category is None:
-        embed = discord.Embed(
-            title="👑 Ghost VR Bot — Command Help",
-            description="The most powerful Discord bot ever made! Use `!help <category>` for details.",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="🔨 Moderation", value="`!help mod`", inline=True)
-        embed.add_field(name="📢 Announcements", value="`!help announce`", inline=True)
-        embed.add_field(name="🔴 Streams", value="`!help stream`", inline=True)
-        embed.add_field(name="⚡ Leveling", value="`!help level`", inline=True)
-        embed.add_field(name="🎉 Giveaways", value="`!help give`", inline=True)
-        embed.add_field(name="📊 Polls", value="`!help poll`", inline=True)
-        embed.add_field(name="🎟️ Tickets", value="`!help ticket`", inline=True)
-        embed.add_field(name="😂 Fun", value="`!help fun`", inline=True)
-        embed.add_field(name="🛡️ Auto-Mod", value="`!help automod`", inline=True)
-        embed.add_field(name="🔧 Utility", value="`!help util`", inline=True)
-        embed.set_footer(text=f"Ghost VR Bot v{BOT_VERSION} | Prefix: {PREFIX}")
-        await ctx.send(embed=embed)
-        return
-
-    cat = category.lower()
-    embed = discord.Embed(color=discord.Color.gold())
-
-    if cat == "mod":
-        embed.title = "🔨 Moderation Commands"
-        embed.description = (
-            "`!ban @user [reason]` — Ban a member\n"
-            "`!kick @user [reason]` — Kick a member\n"
-            "`!mute @user [minutes] [reason]` — Mute a member\n"
-            "`!unmute @user` — Unmute a member\n"
-            "`!warn @user [reason]` — Warn a member\n"
-            "`!warnings [@user]` — View warnings\n"
-            "`!clearwarnings @user` — Clear warnings\n"
-            "`!purge <amount>` — Delete messages\n"
-            "`!lockdown [reason]` — Lock channel\n"
-            "`!unlock` — Unlock channel\n"
-            "`!nick @user <name>` — Change nickname\n"
-            "`!giverole @user @role` — Give role\n"
-            "`!removerole @user @role` — Remove role"
-        )
-    elif cat == "announce":
-        embed.title = "📢 Announcement Commands"
-        embed.description = (
-            "`!announce #channel <message>` — Send an @everyone announcement\n"
-            "`!embed #channel <title> <description>` — Send a custom embed\n"
-            "`!setwelcome #channel [message]` — Set welcome channel"
-        )
-    elif cat == "stream":
-        embed.title = "🔴 Stream Alert Commands"
-        embed.description = (
-            "`!setstreamchannel #channel` — Set the stream alerts channel\n"
-            "`!addstreamer <twitch_username>` — Track a streamer\n"
-            "`!removestreamer <twitch_username>` — Stop tracking\n"
-            "`!streamers` — List tracked streamers\n\n"
-            "⚠️ Requires TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET env vars"
-        )
-    elif cat == "level":
-        embed.title = "⚡ Leveling Commands"
-        embed.description = (
-            "`!rank [@user]` — View your rank/XP\n"
-            "`!leaderboard` — Top 10 XP leaderboard"
-        )
-    elif cat == "give":
-        embed.title = "🎉 Giveaway Commands"
-        embed.description = "`!giveaway <minutes> <winners> <prize>` — Start a giveaway"
-    elif cat == "poll":
-        embed.title = "📊 Poll Commands"
-        embed.description = '`!poll "Question" Option1 Option2 ...` — Create a poll (up to 10 options)'
-    elif cat == "ticket":
-        embed.title = "🎟️ Ticket Commands"
-        embed.description = (
-            "`!ticket [reason]` — Open a support ticket\n"
-            "`!closeticket` — Close the current ticket"
-        )
-    elif cat == "fun":
-        embed.title = "😂 Fun Commands"
-        embed.description = (
-            "`!8ball <question>` — Ask the magic 8ball\n"
-            "`!coinflip` — Flip a coin\n"
-            "`!roll [sides]` — Roll a dice\n"
-            "`!ship @user1 [@user2]` — Check compatibility\n"
-            "`!roast [@user]` — Roast someone\n"
-            "`!hug @user` — Hug someone\n"
-            "`!slap @user` — Slap someone\n"
-            "`!meme` — Random meme\n"
-            "`!joke` — Random joke\n"
-            "`!ask <question>` — Ask the bot anything"
-        )
-    elif cat == "automod":
-        embed.title = "🛡️ Auto-Mod Commands"
-        embed.description = (
-            "`!automod spam on/off` — Toggle spam filter\n"
-            "`!automod caps on/off` — Toggle caps filter\n"
-            "`!automod addbadword <word>` — Add a banned word\n"
-            "`!automod removebadword <word>` — Remove a banned word\n"
-            "`!automod status` — View current settings"
-        )
-    elif cat == "util":
-        embed.title = "🔧 Utility Commands"
-        embed.description = (
-            "`!serverinfo` — Server information\n"
-            "`!userinfo [@user]` — User information\n"
-            "`!avatar [@user]` — View avatar\n"
-            "`!ping` — Bot latency\n"
-            "`!uptime` — Bot uptime\n"
-            "`!botinfo` — Bot information\n"
-            "`!afk [reason]` — Set AFK status\n"
-            "`!remind <time> <s/m/h/d> <reminder>` — Set a reminder"
-        )
-    await ctx.send(embed=embed)
-
-# ─────────────────────────────────────────────
-#  ERROR HANDLER
-# ─────────────────────────────────────────────
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command.")
-    elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ Member not found. Try mentioning them directly.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Missing argument: `{error.param.name}`. Use `!help` for usage.")
-    elif isinstance(error, commands.CommandNotFound):
-        pass  # Ignore unknown commands silently
-    else:
-        print(f"[Error] {error}")
-
-# ─────────────────────────────────────────────
-#  KEEP-ALIVE WEB SERVER (required for Render)
-# ─────────────────────────────────────────────
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-
 class KeepAlive(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -1221,13 +110,842 @@ def run_server():
     server.serve_forever()
 
 # ─────────────────────────────────────────────
+#  ON READY
+# ─────────────────────────────────────────────
+@bot.event
+async def on_ready():
+    print(f"\n{'═'*55}")
+    print(f"  👑 Ghost VR's Ultimate Bot v2.0 is ONLINE!")
+    print(f"  Bot: {bot.user} (ID: {bot.user.id})")
+    print(f"  Servers: {len(bot.guilds)}")
+    print(f"{'═'*55}\n")
+    try:
+        synced = await tree.sync()
+        print(f"  ✅ Synced {len(synced)} slash commands globally")
+    except Exception as e:
+        print(f"  ❌ Slash sync error: {e}")
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.watching,
+            name=f"👑 {len(bot.guilds)} servers | /help"
+        )
+    )
+    check_streams.start()
+    check_reminders.start()
+    check_giveaways.start()
+
+# ─────────────────────────────────────────────
+#  ON MESSAGE (automod + xp + AFK)
+# ─────────────────────────────────────────────
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild:
+        return
+
+    g = get_guild(message.guild.id)
+    uid = str(message.author.id)
+
+    # AFK mention check
+    for mentioned in message.mentions:
+        mid = str(mentioned.id)
+        if mid in g["afk"]:
+            await message.channel.send(
+                embed=discord.Embed(description=f"💤 **{mentioned.display_name}** is AFK: {g['afk'][mid]}", color=discord.Color.orange()),
+                delete_after=10
+            )
+
+    # AFK return
+    if uid in g["afk"]:
+        del g["afk"][uid]
+        save_data(db)
+        await message.channel.send(f"✅ Welcome back {message.author.mention}! AFK removed.", delete_after=8)
+
+    # Automod
+    am = g.get("automod", {})
+    now = time.time()
+    if am.get("spam"):
+        spam_tracker[uid] = [t for t in spam_tracker[uid] if now - t < 5]
+        spam_tracker[uid].append(now)
+        if len(spam_tracker[uid]) >= 5:
+            await message.delete()
+            await message.channel.send(f"⚠️ {message.author.mention} stop spamming!", delete_after=5)
+            return
+
+    if am.get("caps") and len(message.content) > 10:
+        caps = sum(1 for c in message.content if c.isupper()) / len(message.content)
+        if caps > 0.7:
+            await message.delete()
+            await message.channel.send(f"⚠️ {message.author.mention} no excessive caps!", delete_after=5)
+            return
+
+    for word in am.get("badwords", []):
+        if word.lower() in message.content.lower():
+            await message.delete()
+            await message.channel.send(f"⚠️ {message.author.mention} watch your language!", delete_after=5)
+            return
+
+    # XP
+    if uid not in g["xp"]:
+        g["xp"][uid] = 0
+        g["levels"][uid] = 1
+    g["xp"][uid] += random.randint(5, 15)
+    xp_needed = g["levels"][uid] * 100
+    if g["xp"][uid] >= xp_needed:
+        g["xp"][uid] -= xp_needed
+        g["levels"][uid] += 1
+        lv = g["levels"][uid]
+        save_data(db)
+        await message.channel.send(embed=discord.Embed(
+            title="🎉 Level Up!",
+            description=f"{message.author.mention} reached **Level {lv}**! 🚀",
+            color=discord.Color.gold()
+        ))
+        return
+    save_data(db)
+    await bot.process_commands(message)
+
+# ─────────────────────────────────────────────
+#  MEMBER JOIN / LEAVE
+# ─────────────────────────────────────────────
+@bot.event
+async def on_member_join(member):
+    g = get_guild(member.guild.id)
+    ch_id = g.get("welcome_channel")
+    if ch_id:
+        ch = bot.get_channel(int(ch_id))
+        if ch:
+            msg = g["welcome_msg"].replace("{user}", member.mention).replace("{server}", member.guild.name)
+            embed = discord.Embed(title="👋 Welcome!", description=msg, color=discord.Color.green())
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.add_field(name="Member Count", value=str(member.guild.member_count))
+            await ch.send(embed=embed)
+
+@bot.event
+async def on_member_remove(member):
+    g = get_guild(member.guild.id)
+    ch_id = g.get("leave_channel")
+    if ch_id:
+        ch = bot.get_channel(int(ch_id))
+        if ch:
+            msg = g["leave_msg"].replace("{user}", str(member)).replace("{server}", member.guild.name)
+            await ch.send(embed=discord.Embed(description=msg, color=discord.Color.red()))
+
+# ─────────────────────────────────────────────
+#  BACKGROUND TASKS
+# ─────────────────────────────────────────────
+twitch_token_cache = {"token": None, "expires": 0}
+
+async def get_twitch_token():
+    if twitch_token_cache["token"] and time.time() < twitch_token_cache["expires"]:
+        return twitch_token_cache["token"]
+    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+        return None
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://id.twitch.tv/oauth2/token", params={
+            "client_id": TWITCH_CLIENT_ID,
+            "client_secret": TWITCH_CLIENT_SECRET,
+            "grant_type": "client_credentials"
+        }) as r:
+            if r.status == 200:
+                data = await r.json()
+                twitch_token_cache["token"] = data["access_token"]
+                twitch_token_cache["expires"] = time.time() + data["expires_in"] - 60
+                return twitch_token_cache["token"]
+    return None
+
+async def verify_twitch_user(username: str, token: str) -> dict | None:
+    """Search Twitch to confirm the account exists. Returns user info or None."""
+    if not token:
+        return None
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"https://api.twitch.tv/helix/users?login={username.lower()}",
+            headers={"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {token}"}
+        ) as r:
+            if r.status != 200:
+                return None
+            data = await r.json()
+            users = data.get("data", [])
+            return users[0] if users else None
+
+@tasks.loop(seconds=60)
+async def check_streams():
+    token = await get_twitch_token()
+    if not token:
+        return
+    for guild in bot.guilds:
+        g = get_guild(guild.id)
+        streamers = g.get("twitch_streamers_v2", {})
+        # streamers = { "username": {"channel_id": "123", "live": False, "login": "exactlogin"} }
+        if not streamers:
+            continue
+        changed = False
+        for username, info in streamers.items():
+            ch_id = info.get("channel_id")
+            if not ch_id:
+                continue
+            ch = bot.get_channel(int(ch_id))
+            if not ch:
+                continue
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"https://api.twitch.tv/helix/streams?user_login={username}",
+                        headers={"Client-ID": TWITCH_CLIENT_ID, "Authorization": f"Bearer {token}"}
+                    ) as r:
+                        if r.status != 200:
+                            continue
+                        data = await r.json()
+                        streams = data.get("data", [])
+                        was_live = info.get("live", False)
+                        is_live = len(streams) > 0
+                        if is_live and not was_live:
+                            s = streams[0]
+                            # Get profile image
+                            display_name = s.get("user_name", username)
+                            thumb = s.get("thumbnail_url", "").replace("{width}", "320").replace("{height}", "180")
+                            embed = discord.Embed(
+                                title=f"🔴 {display_name} just went LIVE!",
+                                description=f"**{s.get('title', 'No title')}**",
+                                url=f"https://twitch.tv/{username}",
+                                color=discord.Color.purple()
+                            )
+                            embed.add_field(name="🎮 Game", value=s.get("game_name", "Unknown"), inline=True)
+                            embed.add_field(name="👀 Viewers", value=str(s.get("viewer_count", 0)), inline=True)
+                            if thumb:
+                                embed.set_image(url=thumb)
+                            embed.set_footer(text=f"twitch.tv/{username} • Click the title to watch!")
+                            await ch.send(f"@everyone 🔴 **{display_name} is live!** Come watch!", embed=embed)
+                            info["live"] = True
+                            changed = True
+                        elif not is_live and was_live:
+                            info["live"] = False
+                            changed = True
+            except Exception as e:
+                print(f"[StreamCheck Error] {username}: {e}")
+        if changed:
+            save_data(db)
+
+@tasks.loop(minutes=1)
+async def check_reminders():
+    now = datetime.datetime.utcnow().timestamp()
+    changed = False
+    for gid, gdata in db.items():
+        remaining = []
+        for r in gdata.get("reminders", []):
+            if now >= r["time"]:
+                try:
+                    ch = bot.get_channel(int(r["channel"]))
+                    user = await bot.fetch_user(int(r["user"]))
+                    if ch and user:
+                        await ch.send(f"⏰ {user.mention} Reminder: **{r['text']}**")
+                except:
+                    pass
+                changed = True
+            else:
+                remaining.append(r)
+        gdata["reminders"] = remaining
+    if changed:
+        save_data(db)
+
+@tasks.loop(minutes=1)
+async def check_giveaways():
+    now = datetime.datetime.utcnow().timestamp()
+    changed = False
+    for gid, gdata in db.items():
+        for msg_id, gav in list(gdata.get("giveaways", {}).items()):
+            if gav.get("ended"):
+                continue
+            if now >= gav["ends"]:
+                try:
+                    guild = bot.get_guild(int(gid))
+                    ch = guild.get_channel(int(gav["channel"])) if guild else None
+                    if ch:
+                        msg = await ch.fetch_message(int(msg_id))
+                        reaction = discord.utils.get(msg.reactions, emoji="🎉")
+                        users = [u async for u in reaction.users() if not u.bot] if reaction else []
+                        if users:
+                            winner = random.choice(users)
+                            await ch.send(embed=discord.Embed(
+                                title="🎉 Giveaway Ended!",
+                                description=f"**Prize:** {gav['prize']}\n**Winner:** {winner.mention} 🏆",
+                                color=discord.Color.gold()
+                            ))
+                        else:
+                            await ch.send(embed=discord.Embed(
+                                title="🎉 Giveaway Ended",
+                                description=f"No one entered the **{gav['prize']}** giveaway.",
+                                color=discord.Color.red()
+                            ))
+                except:
+                    pass
+                gdata["giveaways"][msg_id]["ended"] = True
+                changed = True
+    if changed:
+        save_data(db)
+
+# ═══════════════════════════════════════════════
+#  SLASH COMMANDS
+# ═══════════════════════════════════════════════
+
+# ─── GENERAL ───────────────────────────────────
+
+@tree.command(name="help", description="Show all bot commands")
+async def help_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(title="👑 Ghost VR Bot — Command List", color=discord.Color.blurple())
+    embed.add_field(name="🛡️ Moderation", value="`/ban` `/kick` `/mute` `/unmute` `/warn` `/warnings` `/clearwarnings` `/purge` `/lockdown` `/unlock`", inline=False)
+    embed.add_field(name="📢 Announcements", value="`/announce` `/embed`", inline=False)
+    embed.add_field(name="⚙️ Setup", value="`/setwelcome` `/setleave` `/setlog` `/addstreamer` `/removestreamer` `/liststreamers`", inline=False)
+    embed.add_field(name="⭐ Leveling", value="`/rank` `/leaderboard`", inline=False)
+    embed.add_field(name="🎉 Fun & Games", value="`/giveaway` `/endgiveaway` `/poll` `/8ball` `/coinflip` `/roast` `/ship` `/roll`", inline=False)
+    embed.add_field(name="🎫 Tickets", value="`/ticket` `/closeticket`", inline=False)
+    embed.add_field(name="💤 AFK & Reminders", value="`/afk` `/remind`", inline=False)
+    embed.add_field(name="🤖 AI", value="`/ask`", inline=False)
+    embed.add_field(name="🔒 Automod", value="`/automod` `/addword` `/removeword`", inline=False)
+    embed.add_field(name="ℹ️ Info", value="`/ping` `/uptime` `/serverinfo` `/userinfo`", inline=False)
+    embed.set_footer(text="Ghost VR's Ultimate Bot v2.0")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="ping", description="Check bot latency")
+async def ping(interaction: discord.Interaction):
+    latency = round(bot.latency * 1000)
+    color = discord.Color.green() if latency < 100 else discord.Color.orange() if latency < 200 else discord.Color.red()
+    embed = discord.Embed(title="🏓 Pong!", description=f"Latency: **{latency}ms**", color=color)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="uptime", description="Check how long the bot has been online")
+async def uptime(interaction: discord.Interaction):
+    seconds = int(time.time() - START_TIME)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    embed = discord.Embed(title="⏱️ Uptime", description=f"**{h}h {m}m {s}s**", color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="serverinfo", description="Show server information")
+async def serverinfo(interaction: discord.Interaction):
+    g = interaction.guild
+    embed = discord.Embed(title=f"🏠 {g.name}", color=discord.Color.blurple())
+    embed.add_field(name="Owner", value=str(g.owner))
+    embed.add_field(name="Members", value=str(g.member_count))
+    embed.add_field(name="Channels", value=str(len(g.channels)))
+    embed.add_field(name="Roles", value=str(len(g.roles)))
+    embed.add_field(name="Created", value=g.created_at.strftime("%Y-%m-%d"))
+    if g.icon:
+        embed.set_thumbnail(url=g.icon.url)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="userinfo", description="Show info about a user")
+@app_commands.describe(member="The member to look up")
+async def userinfo(interaction: discord.Interaction, member: discord.Member = None):
+    member = member or interaction.user
+    embed = discord.Embed(title=f"👤 {member}", color=discord.Color.blurple())
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="ID", value=str(member.id))
+    embed.add_field(name="Nickname", value=member.nick or "None")
+    embed.add_field(name="Joined", value=member.joined_at.strftime("%Y-%m-%d") if member.joined_at else "Unknown")
+    embed.add_field(name="Account Created", value=member.created_at.strftime("%Y-%m-%d"))
+    top_role = member.top_role.name if member.top_role else "None"
+    embed.add_field(name="Top Role", value=top_role)
+    await interaction.response.send_message(embed=embed)
+
+# ─── MODERATION ────────────────────────────────
+
+@tree.command(name="ban", description="Ban a member")
+@app_commands.describe(member="Member to ban", reason="Reason for ban")
+@app_commands.default_permissions(ban_members=True)
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.ban(reason=reason)
+    embed = discord.Embed(title="🔨 Banned", description=f"**{member}** was banned.\n**Reason:** {reason}", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="kick", description="Kick a member")
+@app_commands.describe(member="Member to kick", reason="Reason for kick")
+@app_commands.default_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.kick(reason=reason)
+    embed = discord.Embed(title="👢 Kicked", description=f"**{member}** was kicked.\n**Reason:** {reason}", color=discord.Color.orange())
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="mute", description="Mute a member")
+@app_commands.describe(member="Member to mute", duration="Duration in minutes (0 = permanent)", reason="Reason")
+@app_commands.default_permissions(manage_roles=True)
+async def mute(interaction: discord.Interaction, member: discord.Member, duration: int = 0, reason: str = "No reason provided"):
+    await interaction.response.defer()
+    muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
+    if not muted_role:
+        muted_role = await interaction.guild.create_role(name="Muted")
+        for ch in interaction.guild.channels:
+            await ch.set_permissions(muted_role, send_messages=False, speak=False)
+    await member.add_roles(muted_role, reason=reason)
+    embed = discord.Embed(title="🔇 Muted", description=f"**{member}** was muted.\n**Reason:** {reason}", color=discord.Color.dark_gray())
+    if duration > 0:
+        embed.add_field(name="Duration", value=f"{duration} minutes")
+    await interaction.followup.send(embed=embed)
+    if duration > 0:
+        await asyncio.sleep(duration * 60)
+        if muted_role in member.roles:
+            await member.remove_roles(muted_role)
+
+@tree.command(name="unmute", description="Unmute a member")
+@app_commands.describe(member="Member to unmute")
+@app_commands.default_permissions(manage_roles=True)
+async def unmute(interaction: discord.Interaction, member: discord.Member):
+    muted_role = discord.utils.get(interaction.guild.roles, name="Muted")
+    if muted_role and muted_role in member.roles:
+        await member.remove_roles(muted_role)
+        await interaction.response.send_message(f"✅ {member.mention} has been unmuted.")
+    else:
+        await interaction.response.send_message("⚠️ That member isn't muted.", ephemeral=True)
+
+@tree.command(name="warn", description="Warn a member")
+@app_commands.describe(member="Member to warn", reason="Reason for warning")
+@app_commands.default_permissions(manage_messages=True)
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    g = get_guild(interaction.guild.id)
+    uid = str(member.id)
+    if uid not in g["warnings"]:
+        g["warnings"][uid] = []
+    g["warnings"][uid].append({"reason": reason, "time": str(datetime.datetime.utcnow())})
+    save_data(db)
+    count = len(g["warnings"][uid])
+    embed = discord.Embed(title="⚠️ Warning Issued", description=f"**{member}** has been warned.\n**Reason:** {reason}\n**Total Warnings:** {count}", color=discord.Color.yellow())
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="warnings", description="Check warnings for a member")
+@app_commands.describe(member="Member to check")
+@app_commands.default_permissions(manage_messages=True)
+async def warnings(interaction: discord.Interaction, member: discord.Member):
+    g = get_guild(interaction.guild.id)
+    warns = g["warnings"].get(str(member.id), [])
+    if not warns:
+        await interaction.response.send_message(f"✅ {member.mention} has no warnings.", ephemeral=True)
+        return
+    embed = discord.Embed(title=f"⚠️ Warnings for {member}", color=discord.Color.yellow())
+    for i, w in enumerate(warns, 1):
+        embed.add_field(name=f"Warning {i}", value=w["reason"], inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="clearwarnings", description="Clear all warnings for a member")
+@app_commands.describe(member="Member to clear warnings for")
+@app_commands.default_permissions(manage_messages=True)
+async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
+    g = get_guild(interaction.guild.id)
+    g["warnings"][str(member.id)] = []
+    save_data(db)
+    await interaction.response.send_message(f"✅ Cleared all warnings for {member.mention}.")
+
+@tree.command(name="purge", description="Delete multiple messages")
+@app_commands.describe(amount="Number of messages to delete (1-100)")
+@app_commands.default_permissions(manage_messages=True)
+async def purge(interaction: discord.Interaction, amount: int):
+    if amount < 1 or amount > 100:
+        await interaction.response.send_message("⚠️ Amount must be between 1 and 100.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount)
+    await interaction.followup.send(f"🗑️ Deleted {len(deleted)} messages.", ephemeral=True)
+
+@tree.command(name="lockdown", description="Lock a channel so only admins can talk")
+@app_commands.default_permissions(manage_channels=True)
+async def lockdown(interaction: discord.Interaction):
+    await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=False)
+    await interaction.response.send_message("🔒 Channel has been locked down.")
+
+@tree.command(name="unlock", description="Unlock a locked channel")
+@app_commands.default_permissions(manage_channels=True)
+async def unlock(interaction: discord.Interaction):
+    await interaction.channel.set_permissions(interaction.guild.default_role, send_messages=True)
+    await interaction.response.send_message("🔓 Channel has been unlocked.")
+
+# ─── ANNOUNCEMENTS ─────────────────────────────
+
+@tree.command(name="announce", description="Send an announcement embed")
+@app_commands.describe(title="Announcement title", message="Announcement message", channel="Channel to send to (optional)", ping="Ping everyone? (yes/no)")
+@app_commands.default_permissions(manage_messages=True)
+async def announce(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None, ping: str = "no"):
+    ch = channel or interaction.channel
+    embed = discord.Embed(title=f"📢 {title}", description=message, color=discord.Color.blurple())
+    embed.set_footer(text=f"Announced by {interaction.user} • {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    content = "@everyone" if ping.lower() == "yes" else None
+    await ch.send(content=content, embed=embed)
+    await interaction.response.send_message(f"✅ Announcement sent to {ch.mention}!", ephemeral=True)
+
+@tree.command(name="embed", description="Send a custom embed message")
+@app_commands.describe(title="Embed title", description="Embed description", color="Color (red/green/blue/gold/purple)", channel="Channel to send to")
+@app_commands.default_permissions(manage_messages=True)
+async def embed_cmd(interaction: discord.Interaction, title: str, description: str, color: str = "blue", channel: discord.TextChannel = None):
+    ch = channel or interaction.channel
+    colors = {"red": discord.Color.red(), "green": discord.Color.green(), "blue": discord.Color.blue(), "gold": discord.Color.gold(), "purple": discord.Color.purple()}
+    embed = discord.Embed(title=title, description=description, color=colors.get(color.lower(), discord.Color.blue()))
+    embed.set_footer(text=f"By {interaction.user}")
+    await ch.send(embed=embed)
+    await interaction.response.send_message("✅ Embed sent!", ephemeral=True)
+
+# ─── SETUP ─────────────────────────────────────
+
+@tree.command(name="setwelcome", description="Set the welcome channel and message")
+@app_commands.describe(channel="Welcome channel", message="Welcome message. Use {user} and {server}")
+@app_commands.default_permissions(manage_guild=True)
+async def setwelcome(interaction: discord.Interaction, channel: discord.TextChannel, message: str = "Welcome {user} to **{server}**! 🎉"):
+    g = get_guild(interaction.guild.id)
+    g["welcome_channel"] = str(channel.id)
+    g["welcome_msg"] = message
+    save_data(db)
+    await interaction.response.send_message(f"✅ Welcome channel set to {channel.mention}!")
+
+@tree.command(name="setleave", description="Set the leave channel and message")
+@app_commands.describe(channel="Leave channel", message="Leave message. Use {user} and {server}")
+@app_commands.default_permissions(manage_guild=True)
+async def setleave(interaction: discord.Interaction, channel: discord.TextChannel, message: str = "**{user}** has left **{server}**. 😢"):
+    g = get_guild(interaction.guild.id)
+    g["leave_channel"] = str(channel.id)
+    g["leave_msg"] = message
+    save_data(db)
+    await interaction.response.send_message(f"✅ Leave channel set to {channel.mention}!")
+
+@tree.command(name="setlog", description="Set the moderation log channel")
+@app_commands.describe(channel="Log channel")
+@app_commands.default_permissions(manage_guild=True)
+async def setlog(interaction: discord.Interaction, channel: discord.TextChannel):
+    g = get_guild(interaction.guild.id)
+    g["log_channel"] = str(channel.id)
+    save_data(db)
+    await interaction.response.send_message(f"✅ Log channel set to {channel.mention}!")
+
+@tree.command(name="addstreamer", description="Add a Twitch streamer with their own alert channel")
+@app_commands.describe(username="Twitch username to track", channel="Channel to post alerts in")
+@app_commands.default_permissions(manage_guild=True)
+async def addstreamer(interaction: discord.Interaction, username: str, channel: discord.TextChannel):
+    await interaction.response.defer()
+    # Verify the Twitch account exists
+    token = await get_twitch_token()
+    if token:
+        user_info = await verify_twitch_user(username, token)
+        if not user_info:
+            await interaction.followup.send(
+                f"❌ Could not find a Twitch account named **{username}**. Double-check the username and try again.",
+                ephemeral=True
+            )
+            return
+        exact_login = user_info["login"]
+        display_name = user_info["display_name"]
+        profile_img = user_info.get("profile_image_url", "")
+    else:
+        exact_login = username.lower()
+        display_name = username
+        profile_img = ""
+
+    g = get_guild(interaction.guild.id)
+    if "twitch_streamers_v2" not in g:
+        g["twitch_streamers_v2"] = {}
+
+    if exact_login in g["twitch_streamers_v2"]:
+        await interaction.followup.send(f"⚠️ Already tracking **{display_name}**.", ephemeral=True)
+        return
+
+    g["twitch_streamers_v2"][exact_login] = {
+        "channel_id": str(channel.id),
+        "live": False,
+        "display_name": display_name,
+        "profile_img": profile_img
+    }
+    save_data(db)
+
+    embed = discord.Embed(
+        title="✅ Streamer Added!",
+        description=f"Now tracking **{display_name}** on Twitch.\nAlerts will post in {channel.mention} the moment they go live! 🔴",
+        color=discord.Color.purple()
+    )
+    if profile_img:
+        embed.set_thumbnail(url=profile_img)
+    embed.set_footer(text=f"twitch.tv/{exact_login}")
+    await interaction.followup.send(embed=embed)
+
+@tree.command(name="removestreamer", description="Stop tracking a Twitch streamer")
+@app_commands.describe(username="Twitch username to remove")
+@app_commands.default_permissions(manage_guild=True)
+async def removestreamer(interaction: discord.Interaction, username: str):
+    g = get_guild(interaction.guild.id)
+    streamers = g.get("twitch_streamers_v2", {})
+    if username.lower() in streamers:
+        del streamers[username.lower()]
+        save_data(db)
+        await interaction.response.send_message(f"✅ Stopped tracking **{username}**.")
+    else:
+        await interaction.response.send_message(f"⚠️ Not tracking **{username}**.", ephemeral=True)
+
+@tree.command(name="liststreamers", description="List all tracked streamers and their alert channels")
+async def liststreamers(interaction: discord.Interaction):
+    g = get_guild(interaction.guild.id)
+    streamers = g.get("twitch_streamers_v2", {})
+    if not streamers:
+        await interaction.response.send_message("📭 No streamers are being tracked yet. Use `/addstreamer` to add one!", ephemeral=True)
+        return
+    embed = discord.Embed(title="📡 Tracked Streamers", color=discord.Color.purple())
+    for login, info in streamers.items():
+        ch = bot.get_channel(int(info["channel_id"]))
+        ch_name = ch.mention if ch else "Unknown channel"
+        status = "🔴 LIVE" if info.get("live") else "⚫ Offline"
+        embed.add_field(
+            name=f"{info.get('display_name', login)}",
+            value=f"Channel: {ch_name}\nStatus: {status}\ntwitch.tv/{login}",
+            inline=True
+        )
+    await interaction.response.send_message(embed=embed)
+
+# ─── LEVELING ──────────────────────────────────
+
+@tree.command(name="rank", description="Check your rank and XP")
+@app_commands.describe(member="Member to check (leave blank for yourself)")
+async def rank(interaction: discord.Interaction, member: discord.Member = None):
+    member = member or interaction.user
+    g = get_guild(interaction.guild.id)
+    uid = str(member.id)
+    xp = g["xp"].get(uid, 0)
+    level = g["levels"].get(uid, 1)
+    xp_needed = level * 100
+    embed = discord.Embed(title=f"⭐ {member.display_name}'s Rank", color=discord.Color.gold())
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Level", value=str(level))
+    embed.add_field(name="XP", value=f"{xp} / {xp_needed}")
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="leaderboard", description="Show the server XP leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    g = get_guild(interaction.guild.id)
+    sorted_users = sorted(g["levels"].items(), key=lambda x: (x[1], g["xp"].get(x[0], 0)), reverse=True)[:10]
+    embed = discord.Embed(title="🏆 XP Leaderboard", color=discord.Color.gold())
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (uid, level) in enumerate(sorted_users):
+        try:
+            user = await bot.fetch_user(int(uid))
+            name = user.display_name
+        except:
+            name = f"User {uid}"
+        medal = medals[i] if i < 3 else f"#{i+1}"
+        embed.add_field(name=f"{medal} {name}", value=f"Level {level} • {g['xp'].get(uid, 0)} XP", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+# ─── GIVEAWAYS ─────────────────────────────────
+
+@tree.command(name="giveaway", description="Start a giveaway")
+@app_commands.describe(prize="What are you giving away?", duration="Duration in minutes", channel="Channel to host giveaway")
+@app_commands.default_permissions(manage_guild=True)
+async def giveaway(interaction: discord.Interaction, prize: str, duration: int, channel: discord.TextChannel = None):
+    ch = channel or interaction.channel
+    ends = datetime.datetime.utcnow().timestamp() + (duration * 60)
+    ends_dt = datetime.datetime.utcfromtimestamp(ends).strftime("%Y-%m-%d %H:%M UTC")
+    embed = discord.Embed(
+        title="🎉 GIVEAWAY!",
+        description=f"**Prize:** {prize}\n**Ends:** {ends_dt}\n\nReact with 🎉 to enter!",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text=f"Hosted by {interaction.user}")
+    msg = await ch.send(embed=embed)
+    await msg.add_reaction("🎉")
+    g = get_guild(interaction.guild.id)
+    g["giveaways"][str(msg.id)] = {"prize": prize, "ends": ends, "channel": str(ch.id), "ended": False}
+    save_data(db)
+    await interaction.response.send_message(f"✅ Giveaway started in {ch.mention}!", ephemeral=True)
+
+@tree.command(name="endgiveaway", description="End a giveaway early by message ID")
+@app_commands.describe(message_id="The message ID of the giveaway")
+@app_commands.default_permissions(manage_guild=True)
+async def endgiveaway(interaction: discord.Interaction, message_id: str):
+    g = get_guild(interaction.guild.id)
+    gav = g["giveaways"].get(message_id)
+    if not gav or gav.get("ended"):
+        await interaction.response.send_message("⚠️ Giveaway not found or already ended.", ephemeral=True)
+        return
+    gav["ends"] = 0
+    save_data(db)
+    await interaction.response.send_message("✅ Giveaway will end shortly!", ephemeral=True)
+
+# ─── POLLS ─────────────────────────────────────
+
+@tree.command(name="poll", description="Create a poll")
+@app_commands.describe(question="Poll question", option1="Option 1", option2="Option 2", option3="Option 3 (optional)", option4="Option 4 (optional)")
+async def poll(interaction: discord.Interaction, question: str, option1: str, option2: str, option3: str = None, option4: str = None):
+    options = [opt for opt in [option1, option2, option3, option4] if opt]
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+    description = "\n".join([f"{emojis[i]} {opt}" for i, opt in enumerate(options)])
+    embed = discord.Embed(title=f"📊 {question}", description=description, color=discord.Color.blurple())
+    embed.set_footer(text=f"Poll by {interaction.user}")
+    await interaction.response.send_message(embed=embed)
+    msg = await interaction.original_response()
+    for i in range(len(options)):
+        await msg.add_reaction(emojis[i])
+
+# ─── TICKETS ───────────────────────────────────
+
+@tree.command(name="ticket", description="Open a support ticket")
+@app_commands.describe(reason="Reason for your ticket")
+async def ticket(interaction: discord.Interaction, reason: str = "Support needed"):
+    guild = interaction.guild
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    }
+    ch = await guild.create_text_channel(f"ticket-{interaction.user.name}", overwrites=overwrites)
+    embed = discord.Embed(title="🎫 Ticket Opened", description=f"**User:** {interaction.user.mention}\n**Reason:** {reason}\n\nSupport will be with you shortly!\nUse `/closeticket` to close.", color=discord.Color.green())
+    await ch.send(embed=embed)
+    await interaction.response.send_message(f"✅ Ticket created: {ch.mention}", ephemeral=True)
+
+@tree.command(name="closeticket", description="Close the current ticket channel")
+@app_commands.default_permissions(manage_channels=True)
+async def closeticket(interaction: discord.Interaction):
+    if "ticket-" in interaction.channel.name:
+        await interaction.response.send_message("🔒 Closing ticket in 5 seconds...")
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+    else:
+        await interaction.response.send_message("⚠️ This is not a ticket channel.", ephemeral=True)
+
+# ─── AFK ───────────────────────────────────────
+
+@tree.command(name="afk", description="Set your AFK status")
+@app_commands.describe(reason="AFK reason")
+async def afk(interaction: discord.Interaction, reason: str = "AFK"):
+    g = get_guild(interaction.guild.id)
+    g["afk"][str(interaction.user.id)] = reason
+    save_data(db)
+    await interaction.response.send_message(f"💤 {interaction.user.mention} is now AFK: **{reason}**")
+
+# ─── REMINDERS ─────────────────────────────────
+
+@tree.command(name="remind", description="Set a reminder")
+@app_commands.describe(minutes="How many minutes from now?", reminder="What to remind you about")
+async def remind(interaction: discord.Interaction, minutes: int, reminder: str):
+    g = get_guild(interaction.guild.id)
+    remind_time = datetime.datetime.utcnow().timestamp() + (minutes * 60)
+    g["reminders"].append({
+        "user": str(interaction.user.id),
+        "channel": str(interaction.channel.id),
+        "text": reminder,
+        "time": remind_time
+    })
+    save_data(db)
+    await interaction.response.send_message(f"⏰ I'll remind you in **{minutes} minutes**: {reminder}", ephemeral=True)
+
+# ─── FUN ───────────────────────────────────────
+
+@tree.command(name="8ball", description="Ask the magic 8ball a question")
+@app_commands.describe(question="Your yes/no question")
+async def eightball(interaction: discord.Interaction, question: str):
+    answers = [
+        "✅ It is certain.", "✅ Without a doubt.", "✅ Yes, definitely!",
+        "✅ You may rely on it.", "✅ Most likely.", "🤔 Ask again later.",
+        "🤔 Cannot predict now.", "🤔 Don't count on it.", "❌ My reply is no.",
+        "❌ Very doubtful.", "❌ Outlook not so good.", "❌ No way!"
+    ]
+    embed = discord.Embed(title="🎱 Magic 8-Ball", color=discord.Color.dark_purple())
+    embed.add_field(name="Question", value=question, inline=False)
+    embed.add_field(name="Answer", value=random.choice(answers), inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="coinflip", description="Flip a coin")
+async def coinflip(interaction: discord.Interaction):
+    result = random.choice(["🪙 Heads!", "🪙 Tails!"])
+    await interaction.response.send_message(embed=discord.Embed(title="Coin Flip", description=result, color=discord.Color.gold()))
+
+@tree.command(name="roll", description="Roll a dice")
+@app_commands.describe(sides="Number of sides (default 6)")
+async def roll(interaction: discord.Interaction, sides: int = 6):
+    result = random.randint(1, sides)
+    await interaction.response.send_message(embed=discord.Embed(title=f"🎲 Rolled a d{sides}", description=f"You got: **{result}**", color=discord.Color.blurple()))
+
+@tree.command(name="roast", description="Roast a member (for fun!)")
+@app_commands.describe(member="Who to roast")
+async def roast(interaction: discord.Interaction, member: discord.Member):
+    roasts = [
+        f"{member.mention} you're the human equivalent of a participation trophy.",
+        f"{member.mention} your WiFi password is probably 'password'.",
+        f"If brains were gasoline, {member.mention} couldn't power a scooter.",
+        f"{member.mention} you're like a cloud — when you disappear, it's a beautiful day.",
+        f"{member.mention} you bring everyone so much joy... when you leave the room.",
+        f"I'd agree with you, {member.mention}, but then we'd both be wrong.",
+        f"{member.mention} you're proof that evolution can go in reverse.",
+    ]
+    await interaction.response.send_message(random.choice(roasts))
+
+@tree.command(name="ship", description="Ship two users and check their compatibility!")
+@app_commands.describe(user1="First user", user2="Second user")
+async def ship(interaction: discord.Interaction, user1: discord.Member, user2: discord.Member):
+    score = random.randint(0, 100)
+    bar_filled = score // 10
+    bar = "❤️" * bar_filled + "🖤" * (10 - bar_filled)
+    embed = discord.Embed(title="💘 Ship-o-Meter", color=discord.Color.red())
+    embed.description = f"**{user1.display_name}** x **{user2.display_name}**\n\n{bar}\n\n**{score}% compatible!**"
+    if score >= 80:
+        embed.set_footer(text="Match made in heaven! 💍")
+    elif score >= 50:
+        embed.set_footer(text="There's potential here! 💕")
+    else:
+        embed.set_footer(text="Maybe just friends... 😬")
+    await interaction.response.send_message(embed=embed)
+
+# ─── AI CHAT ───────────────────────────────────
+
+@tree.command(name="ask", description="Ask the bot an AI-powered question")
+@app_commands.describe(question="Your question")
+async def ask(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    responses = [
+        f"Great question! Based on what I know: {question} — the answer really depends on context, but generally speaking, you'll want to think carefully about it!",
+        f"Hmm, '{question}' — that's a tricky one. I'd say the best approach is to keep it simple and focus on what matters most.",
+        f"Interesting! Regarding '{question}': there are many perspectives on this. The most important thing is to do your research and trust your instincts.",
+        f"For '{question}' — my best advice: break it down into smaller parts and tackle each one. You've got this!",
+    ]
+    embed = discord.Embed(title="🤖 AI Response", color=discord.Color.blurple())
+    embed.add_field(name="Question", value=question, inline=False)
+    embed.add_field(name="Answer", value=random.choice(responses), inline=False)
+    embed.set_footer(text="Powered by Ghost VR Bot AI")
+    await interaction.followup.send(embed=embed)
+
+# ─── AUTOMOD ───────────────────────────────────
+
+@tree.command(name="automod", description="Toggle automod features")
+@app_commands.describe(feature="Feature to toggle: spam or caps", enabled="on or off")
+@app_commands.default_permissions(manage_guild=True)
+async def automod_cmd(interaction: discord.Interaction, feature: str, enabled: str):
+    g = get_guild(interaction.guild.id)
+    if feature.lower() not in ["spam", "caps"]:
+        await interaction.response.send_message("⚠️ Feature must be `spam` or `caps`.", ephemeral=True)
+        return
+    g["automod"][feature.lower()] = enabled.lower() == "on"
+    save_data(db)
+    status = "✅ Enabled" if enabled.lower() == "on" else "❌ Disabled"
+    await interaction.response.send_message(f"{status} **{feature}** filter.")
+
+@tree.command(name="addword", description="Add a banned word to the filter")
+@app_commands.describe(word="Word to ban")
+@app_commands.default_permissions(manage_guild=True)
+async def addword(interaction: discord.Interaction, word: str):
+    g = get_guild(interaction.guild.id)
+    if word.lower() not in g["automod"]["badwords"]:
+        g["automod"]["badwords"].append(word.lower())
+        save_data(db)
+        await interaction.response.send_message(f"✅ Added `{word}` to the word filter.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"⚠️ `{word}` is already in the filter.", ephemeral=True)
+
+@tree.command(name="removeword", description="Remove a word from the filter")
+@app_commands.describe(word="Word to remove")
+@app_commands.default_permissions(manage_guild=True)
+async def removeword(interaction: discord.Interaction, word: str):
+    g = get_guild(interaction.guild.id)
+    g["automod"]["badwords"] = [w for w in g["automod"]["badwords"] if w != word.lower()]
+    save_data(db)
+    await interaction.response.send_message(f"✅ Removed `{word}` from the word filter.", ephemeral=True)
+
+# ─────────────────────────────────────────────
 #  LAUNCH
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     if not TOKEN:
         print("❌ ERROR: DISCORD_BOT_TOKEN not set!")
         sys.exit(1)
-    print("🚀 Starting Ghost VR's Ultimate Discord Bot...")
+    print("🚀 Starting Ghost VR's Ultimate Discord Bot v2.0...")
     threading.Thread(target=run_server, daemon=True).start()
     bot.run(TOKEN)
-
