@@ -1184,17 +1184,42 @@ async def tiktoklatest(interaction: discord.Interaction, username: str):
 #  MISSING IMPORT FIX
 
 # ─────────────────────────────────────────────
-#  ANONYMOUS MESSAGE
+#  ANNOUNCE COMMAND (with optional anonymous mode)
 # ─────────────────────────────────────────────
-@bot.tree.command(name="anonymous", description="Send an anonymous message to a channel")
-@app_commands.describe(channel="Channel to send the message to", message="Your anonymous message")
-async def anonymous(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+@bot.tree.command(name="announce", description="Send an announcement to a channel")
+@app_commands.describe(
+    channel="Channel to send the announcement to",
+    message="The announcement message",
+    title="Optional title for the announcement",
+    anonymous="Send anonymously? (hides your name)",
+    ping_role="Optional role to ping with the announcement"
+)
+@app_commands.checks.has_permissions(manage_messages=True)
+async def announce(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+    message: str,
+    title: str = "📢 Announcement",
+    anonymous: bool = False,
+    ping_role: discord.Role = None
+):
     await interaction.response.defer(ephemeral=True)
-    embed = discord.Embed(description=message, color=0x2b2d31)
-    embed.set_author(name="Anonymous", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
-    embed.set_footer(text="Anonymous Message")
-    await channel.send(embed=embed)
-    await interaction.followup.send("✅ Your anonymous message was sent!", ephemeral=True)
+    embed = discord.Embed(title=title, description=message, color=0x5865F2)
+    embed.timestamp = discord.utils.utcnow()
+    if anonymous:
+        embed.set_author(name="Anonymous", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
+        embed.set_footer(text="Anonymous Announcement")
+    else:
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.set_footer(text=f"Sent by {interaction.user.display_name}")
+    ping_text = f"{ping_role.mention} " if ping_role else ""
+    await channel.send(content=ping_text if ping_text else None, embed=embed)
+    await interaction.followup.send(f"✅ Announcement sent to {channel.mention}!", ephemeral=True)
+
+@announce.error
+async def announce_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You need **Manage Messages** permission to use this.", ephemeral=True)
 
 # ─────────────────────────────────────────────
 #  RULES COMMAND
