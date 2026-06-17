@@ -1182,6 +1182,45 @@ async def tiktoklatest(interaction: discord.Interaction, username: str):
 
 # ─────────────────────────────────────────────
 #  MISSING IMPORT FIX
+
+# ─────────────────────────────────────────────
+#  ANONYMOUS MESSAGE
+# ─────────────────────────────────────────────
+@bot.tree.command(name="anonymous", description="Send an anonymous message to a channel")
+@app_commands.describe(channel="Channel to send the message to", message="Your anonymous message")
+async def anonymous(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    await interaction.response.defer(ephemeral=True)
+    embed = discord.Embed(description=message, color=0x2b2d31)
+    embed.set_author(name="Anonymous", icon_url="https://cdn.discordapp.com/embed/avatars/0.png")
+    embed.set_footer(text="Anonymous Message")
+    await channel.send(embed=embed)
+    await interaction.followup.send("✅ Your anonymous message was sent!", ephemeral=True)
+
+# ─────────────────────────────────────────────
+#  RULES COMMAND
+# ─────────────────────────────────────────────
+@bot.tree.command(name="rules", description="Display the server rules")
+async def rules(interaction: discord.Interaction):
+    guild = interaction.guild
+    embed = discord.Embed(
+        title=f"📋 {guild.name} Rules",
+        description="Please read and follow all rules to keep this server a great place for everyone.",
+        color=0x5865F2
+    )
+    rules_list = [
+        ("1. Be Respectful", "Treat everyone with respect. No harassment, hate speech, or bullying."),
+        ("2. No Spam", "Do not spam messages, emojis, or mentions."),
+        ("3. No NSFW Content", "Keep all content appropriate for all ages unless in designated channels."),
+        ("4. No Self-Promotion", "Do not advertise servers, social media, or products without permission."),
+        ("5. Follow Discord TOS", "All Discord Terms of Service apply here. See discord.com/terms."),
+        ("6. Listen to Staff", "Follow instructions from moderators and admins at all times."),
+        ("7. Have Fun!", "Enjoy your time here and be a positive part of the community."),
+    ]
+    for name, value in rules_list:
+        embed.add_field(name=name, value=value, inline=False)
+    embed.set_footer(text="Breaking rules may result in a warning, mute, kick, or ban.")
+    await interaction.response.send_message(embed=embed)
+
 # ─────────────────────────────────────────────
 import datetime
 
