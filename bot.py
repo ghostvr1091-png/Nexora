@@ -134,6 +134,9 @@ async def on_ready():
         check_reminders.start()
     if not check_giveaways.is_running():
         check_giveaways.start()
+    if not check_new_guilds.is_running():
+        check_new_guilds.start()
+        _known_guild_ids.update(g.id for g in bot.guilds)
 
 # ─────────────────────────────────────────────
 #  ON MESSAGE
@@ -1224,27 +1227,69 @@ async def announce_error(interaction: discord.Interaction, error):
 # ─────────────────────────────────────────────
 #  RULES COMMAND
 # ─────────────────────────────────────────────
-@bot.tree.command(name="rules", description="Display the server rules")
-async def rules(interaction: discord.Interaction):
+@bot.tree.command(name="rules", description="Post server rules to a channel")
+@app_commands.describe(
+    channel="Channel to post the rules in",
+    rules_text="Your rules text (use \\n for new lines between rules)"
+)
+@app_commands.checks.has_permissions(manage_messages=True)
+async def rules(interaction: discord.Interaction, channel: discord.TextChannel, rules_text: str):
+    await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
+    formatted = rules_text.replace("\n", "\n")
     embed = discord.Embed(
-        title=f"📋 {guild.name} Rules",
-        description="Please read and follow all rules to keep this server a great place for everyone.",
+        title=f"📋 {guild.name} — Server Rules",
+        description=formatted,
         color=0x5865F2
     )
-    rules_list = [
-        ("1. Be Respectful", "Treat everyone with respect. No harassment, hate speech, or bullying."),
-        ("2. No Spam", "Do not spam messages, emojis, or mentions."),
-        ("3. No NSFW Content", "Keep all content appropriate for all ages unless in designated channels."),
-        ("4. No Self-Promotion", "Do not advertise servers, social media, or products without permission."),
-        ("5. Follow Discord TOS", "All Discord Terms of Service apply here. See discord.com/terms."),
-        ("6. Listen to Staff", "Follow instructions from moderators and admins at all times."),
-        ("7. Have Fun!", "Enjoy your time here and be a positive part of the community."),
-    ]
-    for name, value in rules_list:
-        embed.add_field(name=name, value=value, inline=False)
     embed.set_footer(text="Breaking rules may result in a warning, mute, kick, or ban.")
-    await interaction.response.send_message(embed=embed)
+    embed.timestamp = discord.utils.utcnow()
+    await channel.send(embed=embed)
+    await interaction.followup.send(f"✅ Rules posted in {channel.mention}!", ephemeral=True)
+
+@rules.error
+async def rules_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You need **Manage Messages** permission to use this.", ephemeral=True)
+
+
+# ─────────────────────────────────────────────
+#  NEW SERVER TRACKER
+# ─────────────────────────────────────────────
+_known_guild_ids = set()
+
+@tasks.loop(minutes=2)
+async def check_new_guilds():
+    global _known_guild_ids
+    current_ids = {g.id for g in bot.guilds}
+    new_guilds = current_ids - _known_guild_ids
+    if _known_guild_ids:  # skip on first run
+        for guild_id in new_guilds:
+            guild = bot.get_guild(guild_id)
+            if guild:
+                print(f"[NEW SERVER] Joined: {guild.name} (ID: {guild.id}) | Members: {guild.member_count}")
+                # Try to send a welcome message in the first available text channel
+                for ch in guild.text_channels:
+                    if ch.permissions_for(guild.me).send_messages:
+                        embed = discord.Embed(
+                            title="👋 Thanks for adding Nexora!",
+                            description="I'm Nexora, your all-in-one Discord bot!\n\nUse `/help` to see all my commands.\nUse `/announce`, `/rules`, `/ticket` and more to manage your server.",
+                            color=0x5865F2
+                        )
+                        embed.set_footer(text="Nexora Bot • Ready to help!")
+                        try:
+                            await ch.send(embed=embed)
+                        except Exception:
+                            pass
+                        break
+                # Update presence
+                await bot.change_presence(
+                    activity=discord.Activity(
+                        type=discord.ActivityType.watching,
+                        name=f"{len(bot.guilds)} servers | /help"
+                    )
+                )
+    _known_guild_ids = current_ids
 
 # ─────────────────────────────────────────────
 import datetime
