@@ -1220,7 +1220,7 @@ async def announce(
     await interaction.followup.send(f"✅ Announcement sent to {channel.mention}!", ephemeral=True)
 
 @announce.error
-async def announce_error(interaction: discord.Interaction, error):
+async def announce_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("❌ You need **Manage Messages** permission to use this.", ephemeral=True)
 
@@ -1248,7 +1248,7 @@ async def rules(interaction: discord.Interaction, channel: discord.TextChannel, 
     await interaction.followup.send(f"✅ Rules posted in {channel.mention}!", ephemeral=True)
 
 @rules.error
-async def rules_error(interaction: discord.Interaction, error):
+async def rules_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("❌ You need **Manage Messages** permission to use this.", ephemeral=True)
 
