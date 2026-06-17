@@ -281,7 +281,7 @@ async def get_twitch_token():
         print(f"[TwitchToken Error] {e}")
     return None
 
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=300)
 async def check_streams():
     try:
         token = await get_twitch_token()
@@ -334,7 +334,7 @@ async def check_streams():
     except Exception as e:
         print(f"[check_streams Error] {e}")
 
-@tasks.loop(seconds=120)
+@tasks.loop(seconds=300)
 async def check_youtube():
     try:
         for guild in bot.guilds:
@@ -391,7 +391,7 @@ async def check_youtube():
     except Exception as e:
         print(f"[check_youtube Error] {e}")
 
-@tasks.loop(seconds=180)
+@tasks.loop(seconds=300)
 async def check_tiktok():
     try:
         for guild in bot.guilds:
@@ -438,7 +438,7 @@ async def check_tiktok():
     except Exception as e:
         print(f"[check_tiktok Error] {e}")
 
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=60)
 async def check_reminders():
     try:
         now = time.time()
@@ -463,7 +463,7 @@ async def check_reminders():
     except Exception as e:
         print(f"[check_reminders Error] {e}")
 
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=60)
 async def check_giveaways():
     try:
         now = time.time()
@@ -1192,4 +1192,4 @@ if not TOKEN:
     print("ERROR: DISCORD_BOT_TOKEN not set!")
     exit(1)
 
-bot.run(TOKEN)
+bot.run(TOKEN, reconnect=True)
